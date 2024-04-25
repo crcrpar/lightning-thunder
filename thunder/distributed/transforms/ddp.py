@@ -134,11 +134,14 @@ class BatchAllReduceVisitor:
         return VISIT_TYPE.INSERT_AFTER
 
 
-def optimize_allreduce_in_ddp_backward(
-    backward_trace: TraceCtx,
-    compile_data: CompileData,
-) -> TraceCtx:
-    """Reduce all_reduce of the given ``backward_trace`` with gradient bucketing.
+def apply_bucketing_to_grad_allreduce(trace: TraceCtx) -> TraceCtx:
+    """Apply Bucketing to Gradient AllReduce.
+
+    This method takes a trace which could be one representing forward or backward of an
+    :class:`~torch.nn.Module` and also one representing a method, not a PyTorch Module.
+    Then this applies bucketing to the input when it is a trace defining a DDP backward computation
+    where :func:`~thunder.distributed.all_reduce` is applied to gradients.
+    Otherwise, this method returns the input trace as is.
 
     This function collects pre-averaged gradient tensors, replace all existing ``dist_prims.all_reduce``
     and ``dist_prims.wait`` with ``dist_prims.update_bucket_view``, ``dist_prims.pack``,
@@ -151,67 +154,6 @@ def optimize_allreduce_in_ddp_backward(
     view of bucket.
 
     If ``bucket_size_in_mb`` is 0, then this function replaces the existing allreduce's with in-place allreduce's.
-
-    Args:
-        backward_trace:
-        compile_data:
-
-    Returns:
-        :class:`TraceCtx`
-    """
-
-    if get_skip_data_parallel_grad_sync():
-        return backward_trace
-
-    # Map from preaveraged grad to index in trace.output
-    producers = utils.producers(backward_trace)
-    preaveraged_grads: list[TensorProxy] = []
-    preaveraged_to_index = utils.ProxyDict()
-    for i, t in enumerate(tree_flatten(backward_trace.output)[0]):
-        if isinstance(t, TensorProxy):
-            bsym_of_allreduce: BoundSymbol = get_bsym_of_allreduce_of_grad(t, producers)
-            preaveraged_grad_tensor_proxy: TensorProxy = bsym_of_allreduce.flat_proxy_args[0]
-            preaveraged_to_index[preaveraged_grad_tensor_proxy] = i
-            preaveraged_grads.append(preaveraged_grad_tensor_proxy)
-
-    if (bucket_size_in_mb := getattr(compile_data.fn, "bucket_size_in_mb", 25)) <= 0:
-        return make_allreduce_of_vanilla_ddp_inplace(backward_trace, producers)
-
-    gradients_of_same_dtype_and_device: dict[tuple[dtypes.dtype, devices.Device], list[TensorProxy]] = defaultdict(list)
-    for grad in preaveraged_grads:
-        key = (grad.dtype, grad.device)
-        gradients_of_same_dtype_and_device[key].append(grad)
-    gradient_buckets = GradBuckets.build(
-        gradients_of_same_dtype_and_device=gradients_of_same_dtype_and_device,
-        gradient_to_index=preaveraged_to_index,
-        bucket_cap_in_mb=bucket_size_in_mb,
-    )
-
-    flat_backward_trace_output, backward_trace_output_spec = tree_flatten(backward_trace.output)
-    visit_callable = BatchAllReduceVisitor(
-        process_group=compile_data.process_group_for_ddp,
-        flat_backward_trace_output=flat_backward_trace_output,
-        backward_trace_output_spec=backward_trace_output_spec,
-        gradient_buckets=gradient_buckets,
-        prims_to_filter={dist_prims.PrimIDs.ALL_REDUCE, dist_prims.PrimIDs.WAIT},
-    )
-    updated_bwd_trace = visitor_transform(
-        backward_trace,
-        visit_callable,
-        provenance="Batching all_reduce calls",
-    )
-    utils.check(visit_callable.has_replaced_return, lambda: "")
-    return updated_bwd_trace
-
-
-def apply_bucketing_to_grad_allreduce(trace: TraceCtx) -> TraceCtx:
-    """Apply Bucketing to Gradient AllReduce.
-
-    This method takes a trace which could be one representing forward or backward of an
-    :class:`~torch.nn.Module` and also one representing a method, not a PyTorch Module.
-    Then this applies bucketing to the input when it is a trace defining a DDP backward computation
-    where :func:`~thunder.distributed.all_reduce` is applied to gradients.
-    Otherwise, this method returns the input trace as is.
 
     Args:
         trace: A :class:`thunder.core.trace.TraceCtx`.
@@ -252,10 +194,12 @@ def apply_bucketing_to_grad_allreduce(trace: TraceCtx) -> TraceCtx:
         if isinstance(output, TensorProxy):
             output_tensor_to_index_and_prod_bsym[output] = (index, producers[output])
 
-    grad_before_after_allreduce = utils.ProxyDict()
+    preaveraged_grads: list[TensorProxy] = []
+    preaveraged_to_index = utils.ProxyDict()
+    gradients_of_same_dtype_and_device: dict[tuple[dtypes.dtype, devices.Device], list[TensorProxy]] = defaultdict(list)
     bsym: BoundSymbol
     for key in output_tensor_to_index_and_prod_bsym._dict:
-        _, bsym = output_tensor_to_index_and_prod_bsym.get_by_name(key)
+        index, bsym = output_tensor_to_index_and_prod_bsym.get_by_name(key)
         if bsym.sym.id == dist_prims.PrimIDs.WAIT:
             bsym_of_allreduce: BoundSymbol = producers[bsym.flat_proxy_args[0]]
             utils.check(
@@ -263,8 +207,38 @@ def apply_bucketing_to_grad_allreduce(trace: TraceCtx) -> TraceCtx:
                 dist_prims.PrimIDs.ALL_REDUCE,
                 lambda: f"{bsym.sym.id=}, {bsym_of_allreduce.sym.id=}",
             )
-            grad_before_after_allreduce[bsym.flat_proxy_outs[0]] = bsym_of_allreduce.flat_proxy_args[0]
-    if len(grad_before_after_allreduce._dict) == 0:
+            preaveraged_grad: TensorProxy = bsym.flat_proxy_outs[0]
+            allreduced_grad: TensorProxy = bsym_of_allreduce.flat_proxy_args[0]
+            preaveraged_grads.append(allreduced_grad)
+            preaveraged_to_index[allreduced_grad] = index
+
+            key = (preaveraged_grad.dtype, preaveraged_grad.device)
+            gradients_of_same_dtype_and_device[key].append(preaveraged_grad)
+
+    if len(preaveraged_grads) == 0:
         return trace
 
-    return optimize_allreduce_in_ddp_backward(trace, compile_data=compile_data)
+    if (bucket_size_in_mb := getattr(compile_data.fn, "bucket_size_in_mb", 25)) <= 0:
+        return make_allreduce_of_vanilla_ddp_inplace(trace, producers)
+
+    gradient_buckets = GradBuckets.build(
+        gradients_of_same_dtype_and_device=gradients_of_same_dtype_and_device,
+        gradient_to_index=preaveraged_to_index,
+        bucket_cap_in_mb=bucket_size_in_mb,
+    )
+
+    flat_backward_trace_output, backward_trace_output_spec = tree_flatten(trace.output)
+    visit_callable = BatchAllReduceVisitor(
+        process_group=compile_data.process_group_for_ddp,
+        flat_backward_trace_output=flat_backward_trace_output,
+        backward_trace_output_spec=backward_trace_output_spec,
+        gradient_buckets=gradient_buckets,
+        prims_to_filter={dist_prims.PrimIDs.ALL_REDUCE, dist_prims.PrimIDs.WAIT},
+    )
+    updated_bwd_trace = visitor_transform(
+        trace,
+        visit_callable,
+        provenance="Batching all_reduce calls",
+    )
+    utils.check(visit_callable.has_replaced_return, lambda: "")
+    return updated_bwd_trace
