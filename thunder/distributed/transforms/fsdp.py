@@ -66,6 +66,36 @@ _REDUCE_SCATTER_SYM_IDS: set[dist_prims.PrimIDs | str] = {
 }
 
 
+def is_fsdp_fwd_trace(trace: TraceCtx) -> bool:
+    """Return :obj:`True` if any of ``trace.args`` and ``trace.kwargs`` is AllGather'ed."""
+
+    trace_inputs, _ = tree_flatten((trace.args, trace.kwargs))
+    consumers = utils.consumers(trace)
+
+    tensor: TensorProxy
+    for tensor in filter(lambda t: isinstance(t, TensorProxy), trace_inputs):
+        t_consumer: BoundSymbol = consumers[tensor][0]
+        if t_consumer.sym.id in _ALL_GATHER_SYM_IDS:
+            return True
+
+    return False
+
+
+def is_fsdp_bwd_trace(trace: TraceCtx) -> bool:
+    """Return :obj:`True` if any of ``trace.output`` is ReduceScatter'ed."""
+
+    trace_outputs, _ = tree_flatten(trace.output)
+    producers = utils.producers(trace)
+
+    tensor: TensorProxy
+    for tensor in filter(lambda t: isinstance(t, TensorProxy), trace_outputs):
+        t_producer: BoundSymbol = producers[tensor]
+        if t_producer.sym.id in _REDUCE_SCATTER_SYM_IDS:
+            return True
+
+    return False
+
+
 def create_map_of_before_after_comm(
     trace: TraceCtx,
     *,
