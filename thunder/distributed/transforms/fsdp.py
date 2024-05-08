@@ -66,6 +66,14 @@ _REDUCE_SCATTER_SYM_IDS: set[dist_prims.PrimIDs | str] = {
 }
 
 
+def is_backward_trace(trace: TraceCtx) -> bool:
+    """Return :obj:`True` if any of ``trace.output`` is a ``TensorProxy`` whose name has the prefix of 'grad_for_'."""
+    return any(
+        t.name.startswith("grad_for_")
+        for t in filter(lambda t: isinstance(t, TensorProxy), tree_flatten(trace.output)[0])
+    )
+
+
 def is_fsdp_fwd_trace(trace: TraceCtx) -> bool:
     """Return :obj:`True` if any of ``trace.args`` and ``trace.kwargs`` is AllGather'ed."""
 
