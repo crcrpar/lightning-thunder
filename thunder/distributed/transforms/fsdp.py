@@ -104,6 +104,45 @@ def is_fsdp_bwd_trace(trace: TraceCtx) -> bool:
     return False
 
 
+def create_map_from_proxy_name_to_fqn(trace: TraceCtx) -> dict[str, str]:
+    """Create a map from proxy name to ``torch.nn.Parameter``'s name."""
+    from torch.nn import Module
+    from thunder.core.compile_data import get_compile_data
+
+    compile_data: CompileData = get_compile_data()
+    utils.check(compile_data is not None, lambda: "No compile data found")
+    module: Module = compile_data.fn
+    utils.check_type(module, Module)
+
+    fqn_to_proxy_names: dict[str, str] = {}
+    for fqn, _ in module.named_parameters():
+        fqn_to_proxy_names[fqn] = fqn.replace(".", "_")
+
+    return {v: k for k, v in fqn_to_proxy_names.items()}
+
+
+def create_map_from_index_to_fqn(trace: TraceCtx) -> dict[int, str]:
+    proxy_name2fqn = create_map_from_proxy_name_to_fqn(trace)
+    flat_param_or_grad_proxies: list[Proxy]
+    if is_fsdp_fwd_trace(trace):
+        flat_param_or_grad_proxies = list(tree_flatten((trace.args, trace.kwargs))[0])
+    else:
+        flat_param_or_grad_proxies = list(tree_flatten(trace.output)[0])
+
+    index2fqn: dict[int, str] = {}
+    for index, proxy in enumerate(flat_param_or_grad_proxies):
+        if not isinstance(proxy, TensorProxy):
+            continue
+        proxy_name: str = proxy.name
+        if proxy_name.startswith("grad_for_t_"):
+            proxy_name = proxy_name[11:]
+        else:
+            utils.check(proxy_name.startswith("t_"), lambda: f"{proxy=}'s name does not the prefix of 't_'")
+            proxy_name = proxy_name[2:]
+        index2fqn[index] = proxy_name2fqn[proxy_name]
+    return index2fqn
+
+
 def create_map_of_before_after_comm(
     trace: TraceCtx,
     *,
