@@ -122,24 +122,22 @@ def create_map_from_proxy_name_to_fqn(trace: TraceCtx) -> dict[str, str]:
 
 
 def create_map_from_index_to_fqn(trace: TraceCtx) -> dict[int, str]:
-    proxy_name2fqn = create_map_from_proxy_name_to_fqn(trace)
+    base_proxy_name2fqn = create_map_from_proxy_name_to_fqn(trace)
+
     flat_param_or_grad_proxies: list[Proxy]
-    if is_fsdp_fwd_trace(trace):
-        flat_param_or_grad_proxies = list(tree_flatten((trace.args, trace.kwargs))[0])
-    else:
+    proxy_name2fqn: dict[str, str]
+    if is_backward_trace(trace):
         flat_param_or_grad_proxies = list(tree_flatten(trace.output)[0])
+        proxy_name2fqn = {f"grad_for_t_{k}": v for k, v in base_proxy_name2fqn.items()}
+    else:
+        flat_param_or_grad_proxies = list(tree_flatten((trace.args, trace.kwargs))[0])
+        proxy_name2fqn = {f"t_{k}": v for k, v in base_proxy_name2fqn.items()}
 
     index2fqn: dict[int, str] = {}
     for index, proxy in enumerate(flat_param_or_grad_proxies):
         if not isinstance(proxy, TensorProxy):
             continue
-        proxy_name: str = proxy.name
-        if proxy_name.startswith("grad_for_t_"):
-            proxy_name = proxy_name[11:]
-        else:
-            utils.check(proxy_name.startswith("t_"), lambda: f"{proxy=}'s name does not the prefix of 't_'")
-            proxy_name = proxy_name[2:]
-        index2fqn[index] = proxy_name2fqn[proxy_name]
+        index2fqn[index] = proxy_name2fqn[proxy.name]
     return index2fqn
 
 
@@ -795,10 +793,6 @@ class FSDPCommBucketing:
         """
 
         if get_skip_data_parallel_grad_sync():
-            utils.check(
-                self.index_to_fqn,
-                lambda: f"`computation_trc` passed to the dunder init expected to be a `TraceCtx`",
-            )
             if self.requires_bwd_bucketing_allgather:
                 fsdp_bwd_trace = self._apply_bucketing_to_backward_all_gather(fsdp_bwd_trace)
             return stash_unsharded_grads_and_return_none_as_grads(
