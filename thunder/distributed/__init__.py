@@ -645,21 +645,16 @@ def _shard_params(
             _shard_param(param, global_rank, world_size, param_name, dim)
 
 
-def _shard_param(
-    param: torch.Tensor,
-    rank: int,
-    world_size: int,
-    name: str,
-    dim: int | None,
-) -> None:
+def _shard_param(param: torch.Tensor, rank: int, world_size: int, name: str, dim: int | None = None) -> None:
+    dim_to_shard: int = 0 if dim is None else dim
     utils.check(
-        param.shape[dim] % world_size == 0,
+        param.shape[dim_to_shard] % world_size == 0,
         lambda: (
             f"Current sharding requires the first dimension of the parameter {name!r} ({param.shape[dim]})"
             f" to be divisible by the world size ({world_size})"
         ),
     )
-    chunk_size = param.shape[dim] // world_size
+    chunk_size = param.shape[dim_to_shard] // world_size
     # NOTE This could be a ShardTensor to indicate other parts of the code
     # that it's sharded and should be treated differently
     shard = param.data.narrow(dim, chunk_size * rank, chunk_size).clone()
