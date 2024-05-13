@@ -611,7 +611,6 @@ def _shard_params(
     process_group: ProcessGroup,
     device: torch.device | None,
     broadcast_from: int | None,
-    dim: int | None = None,
 ) -> None:
     """Shards the parameters on the first dimension."""
     global_rank = tdist.get_rank(group=process_group)
@@ -642,7 +641,7 @@ def _shard_params(
         # Note [FSDP Sharding]
         # All internal code will assume that the parameters are sharded on the first dimension
         for param_name, param in submodule.named_parameters(recurse=False, prefix=module_name):
-            _shard_param(param, global_rank, world_size, param_name, dim)
+            _shard_param(param, global_rank, world_size, param_name, dim=0)
 
 
 def _shard_param(param: torch.Tensor, rank: int, world_size: int, name: str, dim: int | None = None) -> None:
