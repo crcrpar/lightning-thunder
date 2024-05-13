@@ -657,7 +657,7 @@ def _shard_param(param: torch.Tensor, rank: int, world_size: int, name: str, dim
     chunk_size = param.shape[dim_to_shard] // world_size
     # NOTE This could be a ShardTensor to indicate other parts of the code
     # that it's sharded and should be treated differently
-    shard = param.data.narrow(dim, chunk_size * rank, chunk_size).clone()
+    shard = param.data.narrow(dim_to_shard, chunk_size * rank, chunk_size).clone()
     param.data = shard
 
 
