@@ -374,6 +374,7 @@ def fsdp_transform_module(
     sharding_strategy: FSDPType = FSDPType.ZERO2,
     bucketing_strategy: FSDPBucketingStrategy = FSDPBucketingStrategy.NONE,
 ) -> ThunderModule:
+    from thunder import compile_data as get_compile_data
     from thunder.core.transforms import add_transform
     from thunder.distributed.transforms.fsdp_v2 import FSDPTraceTransform
 
@@ -383,7 +384,7 @@ def fsdp_transform_module(
         msg = "For `fsdp(jit(model), ...)`, {sharding_strategy=} and {bucketing_strategy=} expected to be {FSDPType.ZERO2} and {FSDPBucketingStrategy.NONE}"
         warnings.warn(msg)
 
-    cd = thunder.compile_data(thunder_model)
+    cd = get_compile_data(thunder_model)
     # TODO: promote use_fsdp and use_ddp to public members of CompileData
     cd.use_fsdp = True
 
@@ -411,7 +412,7 @@ def fsdp_transform_module(
         # Each module only initializes its own parameters and not those of its children (recurse=False)
         if any(t.is_meta for t in chain(module_copy.parameters(recurse=False), module_copy.buffers(recurse=False))):
             # TODO: we could also support calling a "param_init_fn" argument like PyTorch
-            thunder.distributed._materialize(module_copy, device)
+            _materialize(module_copy, device)
             for n, p in module_copy.named_parameters(recurse=False, prefix=module_name):
                 thunder_model._overrides[n] = p
                 device_adjustments[n] = device
@@ -444,11 +445,14 @@ def fsdp_transform_module(
                 thunder_model._overrides[pn] = copy.copy(p)
             # we collect shapes and devices because we do not know if other transforms also change it...
             old_shape = thunder_model._overrides[pn].shape
-            thunder.distributed._shard_param(thunder_model._overrides[pn], global_rank, world_size, pn)
+            _shard_param(thunder_model._overrides[pn], global_rank, world_size, pn)
             new_shape = thunder_model._overrides[pn].shape
             sharded_params[pn] = (old_shape, new_shape, thunder_model._overrides[pn].device)
 
-    early_transform_from_trace_to_fsdp_trace = FSDPTraceTransform(sharded_params)
+    early_transform_from_trace_to_fsdp_trace = FSDPTraceTransform(
+        sharded_params=sharded_params,
+        process_group=process_group,
+    )
     # add prologue + compute transform
     thunder_model = add_transform(thunder_model, early_transform=early_transform_from_trace_to_fsdp_trace)
 
