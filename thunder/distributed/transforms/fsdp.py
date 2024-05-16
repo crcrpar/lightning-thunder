@@ -446,26 +446,45 @@ class FSDPCommBucketing:
     The backward trace, the counterpart of the forward, will be updated so that it has fewer ``ReduceScatter``'s.
     ``AllGather``s are also updated if ``sharding_strategy`` is ``FSDPType.ZERO3``.
 
+    Args:
+        compile_data:
+        computation_trc:
+        is_fsdp_transform: :obj:`True` if a model is first :func:`thunder.jit`'ed then :func:`thunder.distributed.fsdp`'ed.
     """
 
     def __init__(
         self,
         compile_data: CompileData,
         computation_trc: TraceCtx | Callable,
+        *,
+        is_fsdp_transform: bool = False,
+        bucketing_strategy: FSDPBucketingStrategy | None = None,
+        process_group: ProcessGroup | None = None,
+        sharding_strategy: FSDPType | None = None,
     ) -> None:
         self.compile_data = compile_data
-        utils.check(
-            hasattr(compile_data.fn, "process_group_for_ddp")
-            and hasattr(compile_data.fn, "bucketing_strategy")
-            and hasattr(compile_data.fn, "sharding_strategy"),
-            lambda: f"Given module does not seem to have all the attributes of `process_group_for_ddp`, `bucketing_strategy`, and `sharding_strategy`, {hasattr(compile_data.fn, 'bucketing_strategy')=}, {hasattr(compile_data.fn, 'sharding_strategy')=}",
-        )
-        self.bucketing_strategy: FSDPBucketingStrategy = compile_data.fn.bucketing_strategy
-        self.apply_bucketing = self.bucketing_strategy != FSDPBucketingStrategy.NONE
-        self.bucket_naming_func = get_extract_bucket_name_from_tensor_proxy(self.bucketing_strategy)
-        self.group: ProcessGroup = compile_data.fn.process_group_for_ddp
+        if not is_fsdp_transform:
+            utils.check(
+                hasattr(compile_data.fn, "process_group_for_ddp")
+                and hasattr(compile_data.fn, "bucketing_strategy")
+                and hasattr(compile_data.fn, "sharding_strategy"),
+                lambda: f"Given module does not seem to have all the attributes of `process_group_for_ddp`, `bucketing_strategy`, and `sharding_strategy`, {hasattr(compile_data.fn, 'bucketing_strategy')=}, {hasattr(compile_data.fn, 'sharding_strategy')=}",
+            )
+            self.bucketing_strategy: FSDPBucketingStrategy = compile_data.fn.bucketing_strategy
+            self.bucket_naming_func = get_extract_bucket_name_from_tensor_proxy(self.bucketing_strategy)
+            self.group: ProcessGroup = compile_data.fn.process_group_for_ddp
+        else:
+            utils.check_type(bucketing_strategy, FSDPBucketingStrategy)
+            utils.check_type(process_group, ProcessGroup)
+            utils.check_type(sharding_strategy, FSDPType)
+            self.bucketing_strategy: FSDPBucketingStrategy = bucketing_strategy
+            self.bucket_naming_func = get_extract_bucket_name_from_tensor_proxy(self.bucketing_strategy)
+            self.group: ProcessGroup = process_group
 
-        self.requires_bwd_bucketing_allgather = compile_data.fn.sharding_strategy == FSDPType.ZERO3
+        self.apply_bucketing = self.bucketing_strategy != FSDPBucketingStrategy.NONE
+        self.requires_bwd_bucketing_allgather = (
+            compile_data.fn.sharding_strategy if not is_fsdp_transform else sharding_strategy
+        ) == FSDPType.ZERO3
 
         # Information for no_sync transform: `index_to_fqn`.
         self.computation_trc = computation_trc

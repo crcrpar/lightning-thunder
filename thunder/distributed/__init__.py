@@ -377,6 +377,7 @@ def fsdp_transform_module(
     from thunder import compile_data as get_compile_data
     from thunder.core.transforms import add_transform
     from thunder.distributed.transforms.fsdp_v2 import FSDPTraceTransform
+    from thunder.distributed.transforms.fsdp_v2 import CommBucketingTraceTransform
 
     if not (sharding_strategy == FSDPType.ZERO2 and bucketing_strategy == FSDPBucketingStrategy.NONE):
         import warnings
@@ -455,6 +456,13 @@ def fsdp_transform_module(
     )
     # add prologue + compute transform
     thunder_model = add_transform(thunder_model, early_transform=early_transform_from_trace_to_fsdp_trace)
+
+    early_transform_for_comm_bucketing = CommBucketingTraceTransform(
+        bucketing_strategy=bucketing_strategy,
+        sharding_strategy=sharding_strategy,
+        process_group=process_group,
+    )
+    thunder_model = add_transform(thunder_model, early_transform=early_transform_for_comm_bucketing)
 
     return thunder_model
 

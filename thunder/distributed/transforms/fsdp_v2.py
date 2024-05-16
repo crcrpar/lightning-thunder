@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "FSDPTraceTransform",
-    "CommBucketingTraceXform",
+    "CommBucketingTraceTransform",
 ]
 
 
@@ -112,9 +112,10 @@ class FSDPTraceTransform:
 
 
 @dataclass
-class CommBucketingTraceXform:
+class CommBucketingTraceTransform:
     bucketing_strategy: FSDPBucketingStrategy
     sharding_strategy: FSDPType
+    process_group: ProcessGroup
 
     def __post_init__(self) -> None:
         from thunder.distributed import FSDPBucketingStrategy
@@ -143,7 +144,16 @@ class CommBucketingTraceXform:
         transform = FSDPCommBucketing(
             compile_data=compile_data,
             computation_trc=computation_trc,
+            is_fsdp_transform=True,
+            bucketing_strategy=self.bucketing_strategy,
+            sharding_strategy=self.sharding_strategy,
+            process_group=self.process_group,
         )
-        new_computation_trc = transform.apply_bucketing_to_forward_trace(computation_trc, set())
+        new_computation_trc = transform.apply_bucketing_to_forward_trace(computation_trc)
+
+        from torch.distributed import get_rank
+
+        if get_rank(self.process_group) == 0:
+            print(new_computation_trc)
 
         return prologue_trc, new_computation_trc, epilogue_trc
