@@ -37,7 +37,6 @@ class FSDPTraceTransform:
         from thunder.distributed import prims as dist_prims
 
         prologue_producers, prologue_consumers = utils.producers_and_consumers(prologue_trace)
-        computation_producers, computation_consumers = utils.producers_and_consumers(computation_trace)
 
         modules_and_thunder_modules = [
             (bsym.args[0], bsym.output)
