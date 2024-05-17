@@ -32,6 +32,8 @@ class PrimIDs(Enum):
 
     # Experimental
     SYNCHRONIZE_OUTPUT_FOR_COLUMN_WISE_TENSOR_PARALLEL = auto()
+    SYNCHRONIZE_INPUT_FOR_ROW_WISE_TENSOR_PARALLEL = auto()
+    SYNCHRONIZE_OUTPUT_FOR_ROW_WISE_TENSOR_PARALLEL = auto()
 
 
 # This enum describes what all_reduce (below) will actually do
@@ -100,6 +102,7 @@ def all_reduce_meta(
     utils.check_type(op, DistributedReduceOps)
     utils.check_type(group, torch.distributed.ProcessGroup)
     utils.check(pytype(do_async) is bool, lambda: f"Expected {do_async=} to be a boolean value")
+    utils.check_type(skip_clone, bool)
 
     if do_async:
         return FutureTensorProxy(like=a)
@@ -284,16 +287,6 @@ def stash_grad_for_fsdp_meta(
 
 
 # see [Megatron-LM: Training Multi-Billion Parameter Language Models Using Model Parallelism](https://arxiv.org/abs/1909.08053)'s Code 1.
-def synchronize_input_for_column_wise_tensor_parallel_meta(
-    t: TensorProxy,
-    group: torch.distributed.ProcessGroup,
-) -> TensorProxy:
-    utils.check_type(t, TensorProxy)
-    utils.check_type(group, torch.distributed.ProcessGroup)
-
-    return TensorProxy(like=t)
-
-
 def synchronize_output_for_column_wise_tensor_parallel_meta(
     t: TensorProxy,
     group: torch.distributed.ProcessGroup,
@@ -304,6 +297,28 @@ def synchronize_output_for_column_wise_tensor_parallel_meta(
     gathered_shape = list(t.shape)
     gathered_shape[-1] *= group.size()
     return TensorProxy(shape=gathered_shape, like=t)
+
+
+def synchronize_input_for_row_wise_tensor_parallel_meta(
+    t: TensorProxy,
+    group: torch.distributed.ProcessGroup,
+) -> TensorProxy:
+    utils.check_type(t, TensorProxy)
+    utils.check_type(group, torch.distributed.ProcessGroup)
+
+    scattered_shape = list(t.shape)
+    scattered_shape[t.ndim - 1] //= group.size()
+    return TensorProxy(shape=scattered_shape, like=t)
+
+
+def synchronize_output_for_row_wise_tensor_parallel_meta(
+    t: TensorProxy,
+    group: torch.distributed.ProcessGroup,
+) -> TensorProxy:
+    utils.check_type(t, TensorProxy)
+    utils.check_type(group, torch.distributed.ProcessGroup)
+
+    return TensorProxy(like=t)
 
 
 all_gather = make_prim(PrimIDs.ALL_GATHER, "all_gather", meta=all_gather_meta)
@@ -326,6 +341,16 @@ synchronize_output_for_column_wise_tensor_parallel = make_prim(
     PrimIDs.SYNCHRONIZE_OUTPUT_FOR_COLUMN_WISE_TENSOR_PARALLEL,
     "synchronize_output_for_column_wise_tensor_parallel",
     meta=synchronize_output_for_column_wise_tensor_parallel_meta,
+)
+synchronize_input_for_row_wise_tensor_parallel = make_prim(
+    PrimIDs.SYNCHRONIZE_INPUT_FOR_ROW_WISE_TENSOR_PARALLEL,
+    "synchronize_input_for_row_wise_tensor_parallel",
+    meta=synchronize_input_for_row_wise_tensor_parallel_meta,
+)
+synchronize_output_for_row_wise_tensor_parallel = make_prim(
+    PrimIDs.SYNCHRONIZE_OUTPUT_FOR_ROW_WISE_TENSOR_PARALLEL,
+    "synchronize_output_for_row_wise_tensor_parallel",
+    meta=synchronize_output_for_row_wise_tensor_parallel_meta,
 )
 
 
@@ -389,9 +414,54 @@ def synchronize_output_for_column_wise_tensor_parallel_forward_rule(
 def synchronize_output_for_column_wise_tensor_parallel_backward_rule(
     group: torch.distributed.ProcessGroup,
     grad: TensorProxy,
-) -> tuple[TensorProxy, tuple[torch.distributed.ProcessGroup]]:
+) -> tuple[TensorProxy, None]:
     # reduce-scatter in the last dim
     return (
         reduce_scatter(grad / group.size(), DistributedReduceOps.SUM, group, do_async=True, dim=grad.ndim - 1).wait(),
         None,
     )
+
+
+@register_augmented_forward(PrimIDs.SYNCHRONIZE_INPUT_FOR_ROW_WISE_TENSOR_PARALLEL)
+def synchronize_input_for_row_wise_tensor_parallel_forward_rule(
+    t: TensorProxy,
+    group: torch.distributed.ProcessGroup,
+) -> tuple[TensorProxy, tuple[torch.distributed.ProcessGroup]]:
+    scattered_input = reduce_scatter(
+        t / group.size(),
+        DistributedReduceOps.SUM,
+        group,
+        do_async=True,
+        dim=t.ndim - 1,
+    ).wait()
+    return scattered_input, (group,)
+
+
+@register_backward(PrimIDs.SYNCHRONIZE_INPUT_FOR_ROW_WISE_TENSOR_PARALLEL)
+def synchronize_input_for_row_wise_tensor_parallel_backward_rule(
+    group: torch.distributed.ProcessGroup,
+    grad: TensorProxy,
+) -> tuple[TensorProxy, None]:
+    import thunder.torch as ltorch
+
+    allgathered = all_gather(grad, group, True, 0).wait()
+    chunked = ltorch.chunk(allgathered, group.size(), 0)
+    gathered = ltorch.cat(chunked, dim=-1)
+    return (gathered, None)
+
+
+@register_augmented_forward(PrimIDs.SYNCHRONIZE_OUTPUT_FOR_ROW_WISE_TENSOR_PARALLEL)
+def synchronize_output_for_row_wise_tensor_parallel_forward_rule(
+    t: TensorProxy,
+    group: torch.distributed.ProcessGroup,
+) -> tuple[TensorProxy, tuple[torch.distributed.ProcessGroup]]:
+    reduced = all_reduce(t, DistributedReduceOps.SUM, group, do_async=True, skip_clone=True).wait()
+    return reduced, (group,)
+
+
+@register_backward(PrimIDs.SYNCHRONIZE_OUTPUT_FOR_ROW_WISE_TENSOR_PARALLEL)
+def synchronize_output_for_row_wise_tensor_parallel_backward_rule(
+    _: torch.distributed.ProcessGroup,
+    grad: TensorProxy,
+) -> tuple[TensorProxy, None]:
+    return (grad, None)
