@@ -13,6 +13,7 @@ from thunder.distributed.tensor_parallel.common import PrePostProcessInterface
 from thunder.distributed.tensor_parallel.common import ComputationTraceTransformVisitorForTensorParallel
 from thunder.distributed.tensor_parallel.common import TransformForTensorParallel
 from thunder.distributed.tensor_parallel.common import TensorParallelLayerType
+from thunder.distributed.tensor_parallel.optimize_comm import TensorParallelCommOptimizer
 
 if TYPE_CHECKING:
     from typing import Any
@@ -35,7 +36,7 @@ __all__ = [
 class ColumnParallelLinearPrePostProcess(PrePostProcessInterface):
     process_group: ProcessGroup
 
-    layer_type: ClassVar[TensorParallelLayerType] = TensorParallelLayerType.COLUMN_PARALLEL_LINEAR
+    _layer_type: ClassVar[TensorParallelLayerType] = TensorParallelLayerType.COLUMN_PARALLEL_LINEAR
 
     def preprocess(self, x: TensorProxy) -> tuple[TensorProxy, tuple[Any, ...]]:
         return super().preprocess(x)
@@ -43,11 +44,21 @@ class ColumnParallelLinearPrePostProcess(PrePostProcessInterface):
     def postprocess(self, y: TensorProxy, _: Any) -> TensorProxy:
         from thunder.distributed import prims as dist_prims
 
-        return dist_prims.synchronize_tensor_parallel_output(
+        synced: TensorProxy = dist_prims.synchronize_tensor_parallel_output(
             y,
             self.process_group,
-            ColumnParallelLinearPrePostProcess.layer_type,
+            self.layer_type,
         )
+        synced._distparallel_type = self.distparallel_type
+        return synced
+
+    @property
+    def layer_type(self) -> TensorParallelLayerType:
+        return ColumnParallelLinearPrePostProcess._layer_type
+
+    @property
+    def distparallel_type(self) -> DistParallelType:
+        return DistParallelType.COLUMN_WISE
 
 
 @dataclass
@@ -55,7 +66,7 @@ class ColumnParallelEmbeddingPrePostProcess(PrePostProcessInterface):
     num_local_embeddings: int
     process_group: ProcessGroup
 
-    layer_type: ClassVar[TensorParallelLayerType] = TensorParallelLayerType.COLUMN_PARALLEL_EMBED
+    _layer_type: ClassVar[TensorParallelLayerType] = TensorParallelLayerType.COLUMN_PARALLEL_EMBED
 
     def __post_init__(self) -> None:
         from torch.distributed import distributed_c10d
@@ -70,9 +81,11 @@ class ColumnParallelEmbeddingPrePostProcess(PrePostProcessInterface):
 
         x = ltorch.sub(x, self.vocab_start_index)
         mask1 = ltorch.ge(x, self.num_local_embeddings)
-        masked1 = ltorch.masked_fill(x, mask1, 0)
+        masked1: TensorProxy = ltorch.masked_fill(x, mask1, 0)
+        masked1._distparallel_type = self.distparallel_type
         mask2 = ltorch.le(x, -1)
         masked2 = ltorch.masked_fill(masked1, mask2, 0)
+        masked2._distparallel_type = self.distparallel_type
         return masked2, (mask1, mask2)
 
     def postprocess(self, y: TensorProxy, masks: Any) -> TensorProxy:
@@ -91,12 +104,23 @@ class ColumnParallelEmbeddingPrePostProcess(PrePostProcessInterface):
                 unflattened_mask.shape == y.shape,
                 lambda: f"{unflattened_mask.shape = }, {y.shape = }",
             )
-            y = ltorch.masked_fill(y, unflattened_mask, 0.0)
-        return dist_prims.synchronize_tensor_parallel_output(
+            y: TensorProxy = ltorch.masked_fill(y, unflattened_mask, 0.0)
+            y._distparallel_type = self.distparallel_type
+        postprocessed: TensorProxy = dist_prims.synchronize_tensor_parallel_output(
             y,
             self.process_group,
-            ColumnParallelEmbeddingPrePostProcess.layer_type,
+            self.layer_type,
         )
+        postprocessed._distparallel_type = self.distparallel_type
+        return postprocessed
+
+    @property
+    def layer_type(self) -> TensorParallelLayerType:
+        return ColumnParallelEmbeddingPrePostProcess._layer_type
+
+    @property
+    def distparallel_type(self) -> DistParallelType:
+        return DistParallelType.COLUMN_WISE
 
 
 @dataclass
@@ -259,5 +283,13 @@ def convert_module_to_columnwise_parallel(
             process_group=process_group,
         ),
     )
+
+    comm_optimization_transform = TensorParallelCommOptimizer(
+        rank=rank,
+        world_size=world_size,
+        compile_data=get_compile_data(thunder_module),
+        process_group=process_group,
+    )
+    colwise_thunder_module = add_transform(colwise_thunder_module, early_transform=comm_optimization_transform)
 
     return colwise_thunder_module

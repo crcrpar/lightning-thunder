@@ -14,6 +14,7 @@ from thunder.distributed.tensor_parallel.common import PrePostProcessInterface
 from thunder.distributed.tensor_parallel.common import ComputationTraceTransformVisitorForTensorParallel
 from thunder.distributed.tensor_parallel.common import TransformForTensorParallel
 from thunder.distributed.tensor_parallel.common import TensorParallelLayerType
+from thunder.distributed.tensor_parallel.optimize_comm import TensorParallelCommOptimizer
 
 if TYPE_CHECKING:
     from typing import Any
@@ -37,7 +38,7 @@ class RowParallelLinearPrePostProcess(PrePostProcessInterface):
     process_group: ProcessGroup
     bias_or_none: TensorProxy | None
 
-    layer_type: ClassVar[TensorParallelLayerType] = TensorParallelLayerType.ROW_PARALLEL_LINEAR
+    _layer_type: ClassVar[TensorParallelLayerType] = TensorParallelLayerType.ROW_PARALLEL_LINEAR
 
     def preprocess(self, x: TensorProxy) -> tuple[TensorProxy, tuple[Any, ...]]:
         # split `x` in the last dim.
@@ -46,20 +47,25 @@ class RowParallelLinearPrePostProcess(PrePostProcessInterface):
 
         chunk_size = x.shape[x.ndim - 1] // self.process_group.size()
         start_idx = chunk_size * c10d.get_rank(self.process_group)
-        return clang.slice_in_dim(x, start_idx, start_idx + chunk_size, dim=x.ndim - 1), None
+        preprocessed: TensorProxy = clang.slice_in_dim(x, start_idx, start_idx + chunk_size, dim=x.ndim - 1)
+        preprocessed._distparallel_type = self.distparallel_type
+        return preprocessed, None
 
     def postprocess(self, y: TensorProxy, _: Any) -> TensorProxy:
         # gather `y` along the last dimension
         import thunder.torch as ltorch
         from thunder.distributed import prims as dist_prims
 
-        all_reduced = dist_prims.synchronize_tensor_parallel_output(
+        all_reduced: TensorProxy = dist_prims.synchronize_tensor_parallel_output(
             y,
             self.process_group,
-            RowParallelLinearPrePostProcess.layer_type,
+            self.layer_type,
         )
+        all_reduced._distparallel_type = self.distparallel_type
         if (bias := self.bias_or_none) is not None:
-            return ltorch.add(all_reduced, bias)
+            out: TensorProxy = ltorch.add(all_reduced, bias)
+            out._distparallel_type = self.distparallel_type
+            return out
         else:
             return all_reduced
 
@@ -77,12 +83,20 @@ class RowParallelLinearPrePostProcess(PrePostProcessInterface):
         else:
             return super().maybe_modify_args_and_kwargs(bsym)
 
+    @property
+    def layer_type(self) -> TensorParallelLayerType:
+        return RowParallelLinearPrePostProcess._layer_type
+
+    @property
+    def distparallel_type(self) -> DistParallelType:
+        return DistParallelType.ROW_WISE
+
 
 @dataclass
 class RowParallelEmbeddingPreProcess(PrePostProcessInterface):
     process_group: ProcessGroup
 
-    layer_type: ClassVar[TensorParallelLayerType] = TensorParallelLayerType.ROW_PARALLEL_EMBED
+    _layer_type: ClassVar[TensorParallelLayerType] = TensorParallelLayerType.ROW_PARALLEL_EMBED
 
     def preprocess(self, x: TensorProxy) -> tuple[TensorProxy, tuple[Any, ...]]:
         return super().preprocess(x)
@@ -90,11 +104,21 @@ class RowParallelEmbeddingPreProcess(PrePostProcessInterface):
     def postprocess(self, y: TensorProxy, _: Any) -> TensorProxy:
         from thunder.distributed import prims as dist_prims
 
-        return dist_prims.synchronize_tensor_parallel_output(
+        postprocessed: TensorProxy = dist_prims.synchronize_tensor_parallel_output(
             y,
             self.process_group,
-            RowParallelEmbeddingPreProcess.layer_type,
+            self.layer_type,
         )
+        postprocessed._distparallel_type = self.distparallel_type
+        return postprocessed
+
+    @property
+    def layer_type(self) -> TensorParallelLayerType:
+        return RowParallelEmbeddingPreProcess._layer_type
+
+    @property
+    def distparallel_type(self) -> DistParallelType:
+        return DistParallelType.ROW_WISE
 
 
 @dataclass
@@ -267,5 +291,12 @@ def convert_module_to_rowwise_parallel(
             process_group=process_group,
         ),
     )
+    comm_optimization_transform = TensorParallelCommOptimizer(
+        rank=rank,
+        world_size=world_size,
+        compile_data=get_compile_data(thunder_module),
+        process_group=process_group,
+    )
+    rowwise_thunder_module = add_transform(rowwise_thunder_module, early_transform=comm_optimization_transform)
 
     return rowwise_thunder_module

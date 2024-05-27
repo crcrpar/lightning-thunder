@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from thunder.core.proxies import DistParallelType
+from thunder.core.proxies import TensorProxy
 
 if TYPE_CHECKING:
     from typing import Any
@@ -14,7 +15,6 @@ if TYPE_CHECKING:
     from torch.distributed import ProcessGroup
     from thunder.common import CompileData
     from thunder.core.proxies import ProxyInterface
-    from thunder.core.proxies import TensorProxy
     from thunder.core.symbol import BoundSymbol
     from thunder.core.trace import TraceCtx
     from thunder.core.trace import TraceProvenance
@@ -59,14 +59,11 @@ class PrePostProcessInterface(ABC):
         """No-op. Mainly for row-wise parallel linear."""
         return bsym
 
+    @property
+    def layer_type(self) -> TensorParallelLayerType: ...
 
-@dataclass(frozen=True)
-class NoOp(PrePostProcessInterface):
-    def preprocess(self, x: TensorProxy) -> tuple[TensorProxy, tuple[Any, ...]]:
-        return super().preprocess(x)
-
-    def postprocess(self, y: TensorProxy, _: Any) -> TensorProxy:
-        return super().postprocess(y)
+    @property
+    def distparallel_type(self) -> DistParallelType: ...
 
 
 @dataclass
@@ -91,13 +88,17 @@ class ComputationTraceTransformVisitorForTensorParallel:
         pre_post_process: PrePostProcessInterface | None = None
         if bsym in self.bsym2prepostprocess:
             pre_post_process = self.bsym2prepostprocess[bsym]
-            orig_arg = bsym.flat_proxy_args[0]
+            orig_arg: TensorProxy = bsym.flat_proxy_args[0]
             new_arg, preprocess_artifacts = pre_post_process.preprocess(orig_arg)
             if new_arg.name != orig_arg.name:
                 self.swap_map[variableify(orig_arg)] = new_arg
 
         new_bsym = bsym.from_bsym_swap_proxies(self.swap_map, skip_output=True)
         if pre_post_process is not None:
+            out: TensorProxy
+            for out in new_bsym.flat_proxy_outs:
+                if isinstance(out, TensorProxy):
+                    out._distparallel_type = pre_post_process.distparallel_type
             new_bsym = pre_post_process.maybe_modify_args_and_kwargs(new_bsym)
         trace = get_tracectx()
         trace.scopes[-1].append(new_bsym)

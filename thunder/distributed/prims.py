@@ -33,6 +33,7 @@ class PrimIDs(Enum):
 
     # Experimental
     SYNCHRONIZE_TENSOR_PARALLEL_OUTPUT = auto()
+    SYNCHRONIZE_TENSOR_PARALLEL_INPUT = auto()
 
 
 # This enum describes what all_reduce (below) will actually do
@@ -324,6 +325,30 @@ def synchronize_tensor_parallel_output_meta(
     return TensorProxy(like=t)
 
 
+def synchronize_tensor_parallel_input_meta(
+    t: TensorProxy,
+    group: torch.distributed.ProcessGroup,
+    layer_type: TensorParallelLayerType,
+) -> TensorProxy:
+    from thunder.distributed.tensor_parallel.common import TensorParallelLayerType
+
+    utils.check_type(t, TensorProxy)
+    utils.check_type(group, torch.distributed.ProcessGroup)
+    utils.check_type(layer_type, TensorParallelLayerType)
+
+    supported_ops = (
+        TensorParallelLayerType.COLUMN_PARALLEL_EMBED,
+        TensorParallelLayerType.COLUMN_PARALLEL_LINEAR,
+        TensorParallelLayerType.ROW_PARALLEL_LINEAR,
+        TensorParallelLayerType.ROW_PARALLEL_EMBED,
+    )
+    utils.check(
+        layer_type in supported_ops,
+        lambda: f"Unsupported {layer_type=}, supported ones are {supported_ops=}",
+    )
+    return TensorProxy(like=t)
+
+
 all_gather = make_prim(PrimIDs.ALL_GATHER, "all_gather", meta=all_gather_meta)
 all_reduce = make_prim(PrimIDs.ALL_REDUCE, "all_reduce", meta=all_reduce_meta)
 broadcast = make_prim(PrimIDs.BROADCAST, "broadcast", meta=broadcast_meta)
@@ -343,6 +368,11 @@ stash_grad_for_fsdp = make_prim(
 synchronize_tensor_parallel_output = make_prim(
     PrimIDs.SYNCHRONIZE_TENSOR_PARALLEL_OUTPUT,
     "synchronize_tensor_parallel_output",
+    meta=synchronize_tensor_parallel_output_meta,
+)
+synchronize_tensor_parallel_input = make_prim(
+    PrimIDs.SYNCHRONIZE_TENSOR_PARALLEL_INPUT,
+    "synchronize_tensor_parallel_input",
     meta=synchronize_tensor_parallel_output_meta,
 )
 
