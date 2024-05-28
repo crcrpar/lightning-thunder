@@ -255,11 +255,9 @@ class TransformForTensorParallel:
         )
 
         updated_proxies: dict[VariableInterface, bool] = {}
-        observed_proxies: list[VariableInterface] = []
         for bsym in new_computation_trace.bound_symbols:
             t: TensorProxy
             for t in tree_flatten((bsym.args, bsym.kwargs, bsym.output))[0]:
-                observed_proxies.append(variableify(t))
                 if not isinstance(t, TensorProxy):
                     continue
 
@@ -267,11 +265,10 @@ class TransformForTensorParallel:
                     continue
                 else:
                     if t_var not in updated_proxies:
-                        from torch.distributed import get_rank
-
-                        if get_rank() == 0:
-                            print(f"$ {t.name=}, {t.distparallel_type=}")
-                        t._distparallel_type = merged_tensorproxy_to_distparallel_type[t_var]
+                        utils.check(
+                            t.distparallel_type == merged_tensorproxy_to_distparallel_type[t_var],
+                            lambda: f"{t} expected to have {merged_tensorproxy_to_distparallel_type[t_var]} but {t.distparallel_type}",
+                        )
                         updated_proxies[t_var] = True
         utils.check(
             len(merged_tensorproxy_to_distparallel_type) == len(updated_proxies),
