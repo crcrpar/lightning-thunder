@@ -47,9 +47,9 @@ class PrePostProcessInterface(ABC):
     def register_tensor_proxy(self, t: TensorProxy) -> None:
         self.new_proxies_to_annotate[variableify(t)] = self.distparallel_type
 
-    def query_distparallel_type_of(self, t: TensorProxy) -> DistParallelType | None:
+    def query_distparallel_type_of(self, t: TensorProxy) -> DistParallelType:
         if (t_var := variableify(t)) not in self.new_proxies_to_annotate:
-            return None
+            return t.distparallel_type
         else:
             return self.new_proxies_to_annotate[t_var]
 
@@ -79,10 +79,7 @@ class PrePostProcessInterface(ABC):
     def distparallel_type(self) -> DistParallelType: ...
 
     def maybe_annotate_tensor_proxy(self, t: TensorProxy) -> None:
-        if t in self.new_proxies_to_annotate and self.new_proxies_to_annotate[t] is None:
-            print(f"# {self.__class__.__name__} sets {self.distparallel_type=} to {t=}")
-            t._distparallel_type = self.distparallel_type
-            self.new_proxies_to_annotate[t] = True
+        t._distparallel_type = self.query_distparallel_type_of(t)
 
 
 @dataclass
