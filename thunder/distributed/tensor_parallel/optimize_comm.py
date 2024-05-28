@@ -44,6 +44,9 @@ class TensorParallelCommOptimizer:
 
         bsyms: list[BoundSymbol] = computation_trace.bound_symbols
 
+        column_wise_parallel_bsyms: list[BoundSymbol] = []
+        row_wise_parallel_bsyms: list[BoundSymbol] = []
+
         has_column_wise: bool = False
         has_row_wise: bool = False
         param: TensorProxy

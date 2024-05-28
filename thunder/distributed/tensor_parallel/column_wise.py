@@ -21,7 +21,6 @@ if TYPE_CHECKING:
     from torch.distributed import ProcessGroup
     from thunder.core.trace import TraceCtx
     from thunder.core.trace import TraceProvenance
-    from thunder.core.trace import VariableInterface
     from thunder.core.symbol import BoundSymbol
     from thunder.core.module import ThunderModule
 

@@ -24,7 +24,6 @@ if TYPE_CHECKING:
     from thunder.core.symbol import BoundSymbol
     from thunder.core.trace import TraceCtx
     from thunder.core.trace import TraceProvenance
-    from thunder.core.trace import VariableInterface
 
 
 __all__ = [
