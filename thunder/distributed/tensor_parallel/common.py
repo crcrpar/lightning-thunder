@@ -4,6 +4,7 @@ from abc import abstractmethod
 from enum import Enum
 from enum import auto
 from dataclasses import dataclass
+from dataclasses import field
 from typing import TYPE_CHECKING
 
 from thunder.core.proxies import DistParallelType
@@ -40,10 +41,15 @@ class TensorParallelLayerType(Enum):
     ROW_PARALLEL_EMBED = auto()
 
 
+@dataclass
 class PrePostProcessInterface(ABC):
     """Defining interfaces of pre/post-process of tensor parallelized ops."""
 
-    new_proxies_to_annotate: dict[VariableInterface, DistParallelType] = {}
+    new_proxies_to_annotate: dict[VariableInterface, DistParallelType] = field(
+        default_factory=dict,
+        kw_only=True,
+        init=False,
+    )
 
     def set_distparallel_type_to(self, t: TensorProxy) -> None:
         t._distparallel_type = self.distparallel_type

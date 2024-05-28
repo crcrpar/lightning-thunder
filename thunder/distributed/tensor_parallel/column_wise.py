@@ -17,12 +17,11 @@ from thunder.distributed.tensor_parallel.optimize_comm import TensorParallelComm
 
 if TYPE_CHECKING:
     from typing import Any
-    from collections.abc import Callable
     from collections.abc import Sequence
     from torch.distributed import ProcessGroup
     from thunder.core.trace import TraceCtx
     from thunder.core.trace import TraceProvenance
-    from thunder.core.transforms import VISIT_TYPE
+    from thunder.core.trace import VariableInterface
     from thunder.core.symbol import BoundSymbol
     from thunder.core.module import ThunderModule
 
