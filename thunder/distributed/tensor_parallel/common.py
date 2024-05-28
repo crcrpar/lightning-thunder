@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 from thunder.core.proxies import DistParallelType
 from thunder.core.proxies import TensorProxy
 from thunder.core.proxies import variableify
+from thunder.core import utils
 
 if TYPE_CHECKING:
     from typing import Any
@@ -44,14 +45,20 @@ class PrePostProcessInterface(ABC):
 
     new_proxies_to_annotate: dict[VariableInterface, DistParallelType] = {}
 
-    def register_tensor_proxy(self, t: TensorProxy) -> None:
+    def set_distparallel_type_to(self, t: TensorProxy) -> None:
+        t._distparallel_type = self.distparallel_type
         self.new_proxies_to_annotate[variableify(t)] = self.distparallel_type
 
     def query_distparallel_type_of(self, t: TensorProxy) -> DistParallelType:
         if (t_var := variableify(t)) not in self.new_proxies_to_annotate:
             return t.distparallel_type
         else:
-            return self.new_proxies_to_annotate[t_var]
+            expected_distparallel_type = self.new_proxies_to_annotate[t_var]
+            utils.check(
+                expected_distparallel_type == t.distparallel_type,
+                lambda: f"{t} should have {expected_distparallel_type} but {t.distparallel_type}",
+            )
+            return expected_distparallel_type
 
     @abstractmethod
     def preprocess(self, x: TensorProxy) -> tuple[TensorProxy, tuple[Any, ...]]:
@@ -228,13 +235,5 @@ class TransformForTensorParallel:
             visit=visit,
             provenance=provenance,
         )
-
-        from torch.distributed import get_rank
-
-        if get_rank() == 0:
-            for bsym, prepostprocess in visit.bsym2prepostprocess.items():
-                print(
-                    f"$$$ {bsym.sym.id = }, {prepostprocess.__class__.__name__}: {prepostprocess.new_proxies_to_annotate = }"
-                )
 
         return prologue_trace, new_computation_trace, epilogue_trace

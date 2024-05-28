@@ -49,7 +49,7 @@ class ColumnParallelLinearPrePostProcess(PrePostProcessInterface):
             self.process_group,
             self.layer_type,
         )
-        self.register_tensor_proxy(synced)
+        self.set_distparallel_type_to(synced)
         return synced
 
     @property
@@ -100,8 +100,8 @@ class ColumnParallelEmbeddingPrePostProcess(PrePostProcessInterface):
         masked1: TensorProxy = ltorch.masked_fill(x, mask1, 0)
         mask2 = ltorch.le(x, -1)
         masked2 = ltorch.masked_fill(masked1, mask2, 0)
-        self.register_tensor_proxy(masked1)
-        self.register_tensor_proxy(masked2)
+        self.set_distparallel_type_to(masked1)
+        self.set_distparallel_type_to(masked2)
         return masked2, (mask1, mask2)
 
     def postprocess(self, y: TensorProxy, masks: Any) -> TensorProxy:
@@ -116,7 +116,7 @@ class ColumnParallelEmbeddingPrePostProcess(PrePostProcessInterface):
             self.process_group,
             self.layer_type,
         )
-        self.register_tensor_proxy(postprocessed)
+        self.set_distparallel_type_to(postprocessed)
         return postprocessed
 
     @property

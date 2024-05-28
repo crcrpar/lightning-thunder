@@ -48,7 +48,7 @@ class RowParallelLinearPrePostProcess(PrePostProcessInterface):
         chunk_size = x.shape[x.ndim - 1] // self.process_group.size()
         start_idx = chunk_size * c10d.get_rank(self.process_group)
         preprocessed: TensorProxy = clang.slice_in_dim(x, start_idx, start_idx + chunk_size, dim=x.ndim - 1)
-        self.register_tensor_proxy(preprocessed)
+        self.set_distparallel_type_to(preprocessed)
         return preprocessed, None
 
     def postprocess(self, y: TensorProxy, _: Any) -> TensorProxy:
@@ -61,10 +61,10 @@ class RowParallelLinearPrePostProcess(PrePostProcessInterface):
             self.process_group,
             self.layer_type,
         )
-        self.register_tensor_proxy(all_reduced)
+        self.set_distparallel_type_to(all_reduced)
         if (bias := self.bias_or_none) is not None:
             out: TensorProxy = ltorch.add(all_reduced, bias)
-            self.register_tensor_proxy(out)
+            self.set_distparallel_type_to(out)
             return out
         else:
             return all_reduced
@@ -109,7 +109,7 @@ class RowParallelEmbeddingPreProcess(PrePostProcessInterface):
             self.process_group,
             self.layer_type,
         )
-        self.register_tensor_proxy(postprocessed)
+        self.set_distparallel_type_to(postprocessed)
         return postprocessed
 
     @property
