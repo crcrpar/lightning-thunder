@@ -8,11 +8,10 @@ from typing import TYPE_CHECKING
 
 from thunder.core.proxies import DistParallelType
 from thunder.core.proxies import TensorProxy
+from thunder.core.proxies import variableify
 
 if TYPE_CHECKING:
     from typing import Any
-    from collections.abc import Callable
-    from torch.distributed import ProcessGroup
     from thunder.common import CompileData
     from thunder.core.proxies import ProxyInterface
     from thunder.core.symbol import BoundSymbol
@@ -20,6 +19,7 @@ if TYPE_CHECKING:
     from thunder.core.trace import TraceProvenance
     from thunder.core.trace import VariableInterface
     from thunder.core.transforms import VISIT_TYPE
+    from torch.distributed import ProcessGroup
 
 
 __all__ = [
@@ -42,6 +42,17 @@ class TensorParallelLayerType(Enum):
 class PrePostProcessInterface(ABC):
     """Defining interfaces of pre/post-process of tensor parallelized ops."""
 
+    new_proxies_to_annotate: dict[VariableInterface, DistParallelType] = {}
+
+    def register_tensor_proxy(self, t: TensorProxy) -> None:
+        self.new_proxies_to_annotate[variableify(t)] = self.distparallel_type
+
+    def query_distparallel_type_of(self, t: TensorProxy) -> DistParallelType | None:
+        if (t_var := variableify(t)) not in self.new_proxies_to_annotate:
+            return None
+        else:
+            return self.new_proxies_to_annotate[t_var]
+
     @abstractmethod
     def preprocess(self, x: TensorProxy) -> tuple[TensorProxy, tuple[Any, ...]]:
         """Apply preprocessing to tensro parallel op's inputs.
@@ -60,10 +71,18 @@ class PrePostProcessInterface(ABC):
         return bsym
 
     @property
+    @abstractmethod
     def layer_type(self) -> TensorParallelLayerType: ...
 
     @property
+    @abstractmethod
     def distparallel_type(self) -> DistParallelType: ...
+
+    def maybe_annotate_tensor_proxy(self, t: TensorProxy) -> None:
+        if t in self.new_proxies_to_annotate and self.new_proxies_to_annotate[t] is None:
+            print(f"# {self.__class__.__name__} sets {self.distparallel_type=} to {t=}")
+            t._distparallel_type = self.distparallel_type
+            self.new_proxies_to_annotate[t] = True
 
 
 @dataclass
@@ -131,7 +150,7 @@ class TransformForTensorParallel:
     def get_visitor_of_computation_trc_and_provenance(
         self,
         computation_trace: TraceCtx,
-    ) -> tuple[Callable[[BoundSymbol], VISIT_TYPE], TraceProvenance | str]: ...
+    ) -> tuple[ComputationTraceTransformVisitorForTensorParallel, TraceProvenance | str]: ...
 
     @abstractmethod
     def _calc_new_shape(self, orig_shape) -> tuple[int, ...]: ...
@@ -212,4 +231,13 @@ class TransformForTensorParallel:
             visit=visit,
             provenance=provenance,
         )
+
+        from torch.distributed import get_rank
+
+        if get_rank() == 0:
+            for bsym, prepostprocess in visit.bsym2prepostprocess.items():
+                print(
+                    f"$$$ {bsym.sym.id = }, {prepostprocess.__class__.__name__}: {prepostprocess.new_proxies_to_annotate = }"
+                )
+
         return prologue_trace, new_computation_trace, epilogue_trace

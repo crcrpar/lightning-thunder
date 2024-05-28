@@ -32,7 +32,7 @@ __all__ = [
 ]
 
 
-@dataclass(frozen=True)
+@dataclass
 class ColumnParallelLinearPrePostProcess(PrePostProcessInterface):
     process_group: ProcessGroup
 
@@ -49,7 +49,7 @@ class ColumnParallelLinearPrePostProcess(PrePostProcessInterface):
             self.process_group,
             self.layer_type,
         )
-        synced._distparallel_type = self.distparallel_type
+        self.register_tensor_proxy(synced)
         return synced
 
     @property
@@ -59,6 +59,22 @@ class ColumnParallelLinearPrePostProcess(PrePostProcessInterface):
     @property
     def distparallel_type(self) -> DistParallelType:
         return DistParallelType.COLUMN_WISE
+
+
+def _apply_mask_to_output(output: TensorProxy, mask: TensorProxy) -> TensorProxy:
+    import thunder.torch as ltorch
+
+    utils.check(
+        mask.shape == output.shape[: mask.ndim],
+        lambda: f"{mask.shape = }, {output.shape = }",
+    )
+    mask = ltorch.unsqueeze(mask, mask.ndim)
+    unflattened_mask = ltorch.repeat(mask, (1, 1, output.shape[-1]))
+    utils.check(
+        unflattened_mask.shape == output.shape,
+        lambda: f"{unflattened_mask.shape = }, {output.shape = }",
+    )
+    return ltorch.masked_fill(output, unflattened_mask, 0.0)
 
 
 @dataclass
@@ -82,36 +98,25 @@ class ColumnParallelEmbeddingPrePostProcess(PrePostProcessInterface):
         x = ltorch.sub(x, self.vocab_start_index)
         mask1 = ltorch.ge(x, self.num_local_embeddings)
         masked1: TensorProxy = ltorch.masked_fill(x, mask1, 0)
-        masked1._distparallel_type = self.distparallel_type
         mask2 = ltorch.le(x, -1)
         masked2 = ltorch.masked_fill(masked1, mask2, 0)
-        masked2._distparallel_type = self.distparallel_type
+        self.register_tensor_proxy(masked1)
+        self.register_tensor_proxy(masked2)
         return masked2, (mask1, mask2)
 
     def postprocess(self, y: TensorProxy, masks: Any) -> TensorProxy:
         from thunder.distributed import prims as dist_prims
-        import thunder.torch as ltorch
 
         utils.check(len(masks) == 2, lambda: f"Expected 2 masks but {len(masks)=}")
-        for mask in masks:
-            utils.check(
-                mask.shape == y.shape[: mask.ndim],
-                lambda: f"{mask.shape = }, {y.shape = }",
-            )
-            mask = ltorch.unsqueeze(mask, mask.ndim)
-            unflattened_mask = ltorch.repeat(mask, (1, 1, y.shape[-1]))
-            utils.check(
-                unflattened_mask.shape == y.shape,
-                lambda: f"{unflattened_mask.shape = }, {y.shape = }",
-            )
-            y: TensorProxy = ltorch.masked_fill(y, unflattened_mask, 0.0)
-            y._distparallel_type = self.distparallel_type
+
+        masked1 = _apply_mask_to_output(y, masks[0])
+        masked2 = _apply_mask_to_output(masked1, masks[1])
         postprocessed: TensorProxy = dist_prims.synchronize_tensor_parallel_output(
-            y,
+            masked2,
             self.process_group,
             self.layer_type,
         )
-        postprocessed._distparallel_type = self.distparallel_type
+        self.register_tensor_proxy(postprocessed)
         return postprocessed
 
     @property
@@ -138,7 +143,7 @@ class TransformForColumnWiseParallel(TransformForTensorParallel):
     def get_visitor_of_computation_trc_and_provenance(
         self,
         computation_trace: TraceCtx,
-    ) -> tuple[Callable[[BoundSymbol], VISIT_TYPE], TraceProvenance | str]:
+    ) -> tuple[ComputationTraceTransformVisitorForTensorParallel, TraceProvenance | str]:
         from thunder.core.pytree import tree_flatten
 
         consumers = utils.consumers(computation_trace)

@@ -3575,7 +3575,13 @@ def linear_meta(a: TensorProxy, w: TensorProxy, bias: None | TensorProxy) -> Ten
     out_shape = batch_dims + (out_length,)
 
     requires_grad = any((a.requires_grad, w.requires_grad, False if bias is None else bias.requires_grad))
-    return TensorProxy(shape=out_shape, device=a.device, dtype=dtype, requires_grad=requires_grad)
+    return TensorProxy(
+        shape=out_shape,
+        device=a.device,
+        dtype=dtype,
+        requires_grad=requires_grad,
+        distparallel_type=w.distparallel_type,
+    )
 
 
 linear = make_prim(PrimIDs.LINEAR, "linear", meta=linear_meta)
@@ -3796,7 +3802,15 @@ convolution = make_prim(
 
 
 def embedding_meta(
-    a: TensorProxy, /, weight, *, padding_idx=-1, max_norm=None, norm_type=2.0, scale_grad_by_freq=False, sparse=False
+    a: TensorProxy,
+    /,
+    weight: TensorProxy,
+    *,
+    padding_idx: int = -1,
+    max_norm=None,
+    norm_type=2.0,
+    scale_grad_by_freq=False,
+    sparse=False,
 ) -> TensorProxy:
     # TODO: canonicalize and validating padding idx with weight.shape[0]
 
@@ -3809,7 +3823,7 @@ def embedding_meta(
     shape = list(a.shape)
     shape.append(weight.shape[1])
 
-    return TensorProxy(like=weight, shape=shape)
+    return TensorProxy(like=weight, shape=shape, distparallel_type=weight.distparallel_type)
 
 
 embedding = make_prim(PrimIDs.EMBEDDING, "embedding", meta=embedding_meta)
