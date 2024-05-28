@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 from thunder.core.proxies import DistParallelType
 from thunder.core.proxies import TensorProxy
 from thunder.core.proxies import variableify
+from thunder.core.pytree import tree_flatten
 from thunder.core import utils
 
 if TYPE_CHECKING:
@@ -240,6 +241,41 @@ class TransformForTensorParallel:
             computation_trace,
             visit=visit,
             provenance=provenance,
+        )
+
+        # Set `distparallel_type` of newly added `TensorProxy`'s by pre/post-processing.
+        total_size = 0
+        merged_tensorproxy_to_distparallel_type: dict[VariableInterface, DistParallelType] = {}
+        for ppp in visit.bsym2prepostprocess.values():
+            merged_tensorproxy_to_distparallel_type |= ppp.new_proxies_to_annotate
+            total_size += len(ppp.new_proxies_to_annotate)
+        utils.check(
+            len(merged_tensorproxy_to_distparallel_type) == total_size,
+            lambda: f"There seems to be some duplicates as {len(merged_tensorproxy_to_distparallel_type)=} != {total_size}",
+        )
+
+        updated_proxies: dict[VariableInterface, bool] = {}
+        observed_proxies: list[VariableInterface] = []
+        for bsym in new_computation_trace.bound_symbols:
+            t: TensorProxy
+            for t in tree_flatten((bsym.args, bsym.kwargs, bsym.output))[0]:
+                observed_proxies.append(variableify(t))
+                if not isinstance(t, TensorProxy):
+                    continue
+
+                if (t_var := variableify(t)) not in merged_tensorproxy_to_distparallel_type:
+                    continue
+                else:
+                    if t_var not in updated_proxies:
+                        from torch.distributed import get_rank
+
+                        if get_rank() == 0:
+                            print(f"$ {t.name=}, {t.distparallel_type=}")
+                        t._distparallel_type = merged_tensorproxy_to_distparallel_type[t_var]
+                        updated_proxies[t_var] = True
+        utils.check(
+            len(merged_tensorproxy_to_distparallel_type) == len(updated_proxies),
+            lambda: f"Seems that some tensor proxies are lost as {len(updated_proxies)} does not match {len(merged_tensorproxy_to_distparallel_type)}",
         )
 
         return prologue_trace, new_computation_trace, epilogue_trace
