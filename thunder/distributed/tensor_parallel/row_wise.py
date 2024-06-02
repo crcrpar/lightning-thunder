@@ -43,12 +43,13 @@ class RowParallelLinearPrePostProcess(PrePostProcessInterface):
         from thunder.distributed import prims as dist_prims
 
         # split `x` in the last dim.
-        return (
-            dist_prims.synchronize_tensor_parallel_input(
-                x, self.process_group, RowParallelLinearPrePostProcess.layer_type
-            ),
-            None,
+        preprocessed: TensorProxy = dist_prims.synchronize_tensor_parallel_input(
+            x,
+            self.process_group,
+            RowParallelLinearPrePostProcess.layer_type,
         )
+        preprocessed._distparallel_type = DistParallelType.ROW_WISE
+        return preprocessed, None
 
     def postprocess(self, y: TensorProxy, _: Any) -> TensorProxy:
         # gather `y` along the last dimension
@@ -60,8 +61,11 @@ class RowParallelLinearPrePostProcess(PrePostProcessInterface):
             self.process_group,
             RowParallelLinearPrePostProcess.layer_type,
         )
+        all_reduced._distparallel_type = DistParallelType.ROW_WISE
         if (bias := self.bias_or_none) is not None:
-            return ltorch.add(all_reduced, bias)
+            all_reduced_with_bias_added: TensorProxy = ltorch.add(all_reduced, bias)
+            all_reduced_with_bias_added._distparallel_type = DistParallelType.ROW_WISE
+            return all_reduced_with_bias_added
         else:
             return all_reduced
 
@@ -92,11 +96,13 @@ class RowParallelEmbeddingPreProcess(PrePostProcessInterface):
     def postprocess(self, y: TensorProxy, _: Any) -> TensorProxy:
         from thunder.distributed import prims as dist_prims
 
-        return dist_prims.synchronize_tensor_parallel_output(
+        postprocessed: TensorProxy = dist_prims.synchronize_tensor_parallel_output(
             y,
             self.process_group,
             RowParallelEmbeddingPreProcess.layer_type,
         )
+        postprocessed._distparallel_type = DistParallelType.ROW_WISE
+        return postprocessed
 
 
 @dataclass
