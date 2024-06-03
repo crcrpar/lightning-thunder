@@ -339,7 +339,7 @@ def synchronize_tensor_parallel_input_meta(
         lambda: f"Unsupported {layer_type=}, supported ones are {supported_ops=}",
     )
     result_shape = list(t.shape)
-    if layer_type == TensorParallelLayerType.COLUMN_PARALLEL_LINEAR:
+    if layer_type == TensorParallelLayerType.ROW_PARALLEL_LINEAR:
         result_shape[-1] //= group.size()
     return TensorProxy(like=t)
 

@@ -127,6 +127,8 @@ class ComputationTraceTransformVisitorForTensorParallel:
         if pre_post_process is not None:
             new_bsym = new_bsym.from_bsym_swap_proxies(input_swap_map)
             new_bsym = pre_post_process.maybe_modify_args_and_kwargs(new_bsym)
+            # note(crcrpar): This header seems to be lost in the extrace.
+            new_bsym.header = f"{pre_post_process.__class__.layer_type}"
         trace = get_tracectx()
         trace.scopes[-1].append(new_bsym)
 
@@ -245,4 +247,10 @@ class TransformForTensorParallel:
             from thunder.distributed.tensor_parallel.optimize_comm import remove_redundant_comms
 
             new_computation_trace = remove_redundant_comms(new_computation_trace)
+
+            from torch.distributed import get_rank
+
+            if get_rank() == 0:
+                print(new_computation_trace)
+
         return prologue_trace, new_computation_trace, epilogue_trace
