@@ -88,6 +88,7 @@ def remove_redundant_comms(trace: TraceCtx) -> TraceCtx:
                 ):
                     swpa_map[key] = col_liinear_output
 
+        indices_to_filter = set(indices_to_filter)
         new_bsyms: list[BoundSymbol] = []
         for idx, bsym in enumerate(trace.bound_symbols):
             if idx in indices_to_filter:
