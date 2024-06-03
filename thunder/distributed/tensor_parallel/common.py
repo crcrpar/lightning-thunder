@@ -248,9 +248,4 @@ class TransformForTensorParallel:
 
             new_computation_trace = remove_redundant_comms(new_computation_trace)
 
-            from torch.distributed import get_rank
-
-            if get_rank() == 0:
-                print(new_computation_trace)
-
         return prologue_trace, new_computation_trace, epilogue_trace

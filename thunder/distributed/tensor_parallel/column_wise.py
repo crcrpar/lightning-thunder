@@ -40,24 +40,23 @@ class ColumnParallelLinearPrePostProcess(PrePostProcessInterface):
     def preprocess(self, x: TensorProxy) -> tuple[TensorProxy, tuple[Any, ...]]:
         from thunder.distributed import prims as dist_prims
 
-        preprocessed: TensorProxy = dist_prims.synchronize_tensor_parallel_input(
-            x,
-            self.process_group,
-            ColumnParallelLinearPrePostProcess.layer_type,
+        return (
+            dist_prims.synchronize_tensor_parallel_input(
+                x,
+                self.process_group,
+                ColumnParallelLinearPrePostProcess.layer_type,
+            ),
+            None,
         )
-        preprocessed._distparallel_type = DistParallelType.COLUMN_WISE
-        return preprocessed, None
 
     def postprocess(self, y: TensorProxy, _: Any) -> TensorProxy:
         from thunder.distributed import prims as dist_prims
 
-        postprocessed: TensorProxy = dist_prims.synchronize_tensor_parallel_output(
+        return dist_prims.synchronize_tensor_parallel_output(
             y,
             self.process_group,
             ColumnParallelLinearPrePostProcess.layer_type,
         )
-        postprocessed._distparallel_type = DistParallelType.COLUMN_WISE
-        return postprocessed
 
 
 @dataclass
@@ -79,13 +78,10 @@ class ColumnParallelEmbeddingPrePostProcess(PrePostProcessInterface):
         import thunder.torch as ltorch
 
         x = ltorch.sub(x, self.vocab_start_index)
-        mask1: TensorProxy = ltorch.ge(x, self.num_local_embeddings)
-        masked1: TensorProxy = ltorch.masked_fill(x, mask1, 0)
-        mask2: TensorProxy = ltorch.le(x, -1)
-        masked2: TensorProxy = ltorch.masked_fill(masked1, mask2, 0)
-
-        for t in (masked1, masked2):
-            t._distparallel_type = DistParallelType.COLUMN_WISE
+        mask1 = ltorch.ge(x, self.num_local_embeddings)
+        masked1 = ltorch.masked_fill(x, mask1, 0)
+        mask2 = ltorch.le(x, -1)
+        masked2 = ltorch.masked_fill(masked1, mask2, 0)
         return masked2, (mask1, mask2)
 
     def postprocess(self, y: TensorProxy, masks: Any) -> TensorProxy:
@@ -105,14 +101,11 @@ class ColumnParallelEmbeddingPrePostProcess(PrePostProcessInterface):
                 lambda: f"{unflattened_mask.shape = }, {y.shape = }",
             )
             y = ltorch.masked_fill(y, unflattened_mask, 0.0)
-            y._distparallel_type = DistParallelType.COLUMN_WISE
-        postprocessed: TensorProxy = dist_prims.synchronize_tensor_parallel_output(
+        return dist_prims.synchronize_tensor_parallel_output(
             y,
             self.process_group,
             ColumnParallelEmbeddingPrePostProcess.layer_type,
         )
-        postprocessed._distparallel_type = DistParallelType.COLUMN_WISE
-        return postprocessed
 
 
 @dataclass
