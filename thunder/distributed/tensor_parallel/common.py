@@ -179,6 +179,7 @@ class TransformForTensorParallel:
         from thunder.core import prims
         from thunder.core import utils
         from thunder.core.transforms import visitor_transform
+        from thunder.distributed.tensor_parallel.optimize_comm import remove_redundant_comms
 
         modules_and_thunder_modules = [
             (bsym.args[0], bsym.output)
@@ -243,9 +244,7 @@ class TransformForTensorParallel:
             provenance=provenance,
         )
 
-        if visit.eligible_for_comm_optimization:
-            from thunder.distributed.tensor_parallel.optimize_comm import remove_redundant_comms
-
-            new_computation_trace = remove_redundant_comms(new_computation_trace)
-
-        return prologue_trace, new_computation_trace, epilogue_trace
+        if not visit.eligible_for_comm_optimization:
+            return prologue_trace, new_computation_trace, epilogue_trace
+        else:
+            return prologue_trace, remove_redundant_comms(new_computation_trace), epilogue_trace
