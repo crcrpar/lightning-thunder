@@ -1,6 +1,4 @@
 from __future__ import annotations
-from collections import defaultdict
-from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from thunder.core import utils
@@ -79,6 +77,8 @@ def remove_redundant_comms(trace: TraceCtx) -> TraceCtx:
             row_linear_input: TensorProxy = row_preprocess_bsym.flat_proxy_outs[0]
             utils.check_type(row_linear_input, TensorProxy)
 
+            # TODO(crcrpar): Better to make sure that between column-wise parallel linear row-wise parallel linear,
+            # the existing bsyms are elementwise.
             if col_liinear_output.shape == row_linear_input.shape:
                 indices_to_filter.extend([bsym_to_idx[col_postprocess_bsym], bsym_to_idx[row_preprocess_bsym]])
 
