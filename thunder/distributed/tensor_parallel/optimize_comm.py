@@ -70,7 +70,7 @@ def remove_redundant_comms(trace: TraceCtx) -> TraceCtx:
         indices_to_filter = []
         # For column-parallel linear: postprocessed -> col-parallel linear output
         # For row-parallel linear: preprocessed -> col-parallel linear output
-        swpa_map: dict[VariableInterface, ProxyInterface] = {}
+        swap_map: dict[VariableInterface, ProxyInterface] = {}
         for col_postprocess_bsym, row_preprocess_bsym in interesting_pairs:
 
             col_liinear_output: TensorProxy = col_postprocess_bsym.flat_proxy_args[0]
@@ -82,18 +82,17 @@ def remove_redundant_comms(trace: TraceCtx) -> TraceCtx:
             if col_liinear_output.shape == row_linear_input.shape:
                 indices_to_filter.extend([bsym_to_idx[col_postprocess_bsym], bsym_to_idx[row_preprocess_bsym]])
 
-                for key in (
-                    variableify(col_postprocess_bsym.flat_proxy_outs[0]),
-                    variableify(row_linear_input),
-                ):
-                    swpa_map[key] = col_liinear_output
+                swap_map[variableify(col_postprocess_bsym.flat_proxy_outs[0])] = col_liinear_output
+
+                orig_row_linear_input: TensorProxy = row_preprocess_bsym.flat_proxy_args[0]
+                swap_map[variableify(row_linear_input)] = orig_row_linear_input
 
         indices_to_filter = set(indices_to_filter)
         new_bsyms: list[BoundSymbol] = []
         for idx, bsym in enumerate(trace.bound_symbols):
             if idx in indices_to_filter:
                 continue
-            new_bsyms.append(bsym.from_bsym_swap_proxies(swap_map=swpa_map, skip_output=True))
+            new_bsyms.append(bsym.from_bsym_swap_proxies(swap_map=swap_map, skip_output=True))
         new_trace.bound_symbols = new_bsyms
 
     return new_trace
