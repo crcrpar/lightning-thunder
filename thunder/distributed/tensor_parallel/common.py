@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 
 from thunder.core.proxies import DistParallelType
 from thunder.core.proxies import TensorProxy
+from thunder.core import utils
 
 if TYPE_CHECKING:
     from typing import Any
@@ -42,6 +43,8 @@ class TensorParallelLayerType(Enum):
 class PrePostProcessInterface(ABC):
     """Defining interfaces of pre/post-process of tensor parallelized ops."""
 
+    process_group: ProcessGroup
+
     @abstractmethod
     def preprocess(self, x: TensorProxy) -> tuple[TensorProxy, tuple[Any, ...]]:
         """Apply preprocessing to tensor parallel op's inputs.
@@ -57,6 +60,17 @@ class PrePostProcessInterface(ABC):
 
     def maybe_modify_args_and_kwargs(self, bsym: BoundSymbol) -> BoundSymbol:
         """No-op. Mainly for row-wise parallel linear."""
+        return bsym
+
+    @property
+    @abstractmethod
+    def requires_output_shape_update(self) -> bool: ...
+
+    def maybe_update_output_shape(self, bsym: BoundSymbol) -> BoundSymbol:
+        orig_output: TensorProxy = bsym.flat_proxy_outs[0]
+        utils.check_type(orig_output, TensorProxy)
+        if self.requires_output_shape_update:
+            orig_output._shape[-1] //= self.group.size()
         return bsym
 
 
@@ -129,6 +143,8 @@ class ComputationTraceTransformVisitorForTensorParallel:
             new_bsym = pre_post_process.maybe_modify_args_and_kwargs(new_bsym)
             # note(crcrpar): This header seems to be lost in the extrace.
             new_bsym.header = f"{pre_post_process.__class__.layer_type}"
+            # Update the outputs shape.
+            new_bsym = pre_post_process.maybe_update_output_shape(new_bsym)
         trace = get_tracectx()
         trace.scopes[-1].append(new_bsym)
 

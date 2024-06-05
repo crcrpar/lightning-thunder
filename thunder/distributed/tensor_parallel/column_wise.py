@@ -9,6 +9,7 @@ from torch.distributed import distributed_c10d
 from thunder.core import utils
 from thunder.core.proxies import TensorProxy
 from thunder.core.proxies import DistParallelType
+from thunder.core.symbol import BoundSymbol
 from thunder.distributed.tensor_parallel.common import PrePostProcessInterface
 from thunder.distributed.tensor_parallel.common import ComputationTraceTransformVisitorForTensorParallel
 from thunder.distributed.tensor_parallel.common import TransformForTensorParallel
@@ -54,6 +55,10 @@ class ColumnParallelLinearPrePostProcess(PrePostProcessInterface):
             self.process_group,
             ColumnParallelLinearPrePostProcess.layer_type,
         )
+
+    @property
+    def requires_output_shape_update(self) -> bool:
+        True
 
 
 @dataclass
@@ -101,6 +106,10 @@ class ColumnParallelEmbeddingPrePostProcess(PrePostProcessInterface):
             self.process_group,
             ColumnParallelEmbeddingPrePostProcess.layer_type,
         )
+
+    @property
+    def requires_output_shape_update(self) -> bool:
+        False
 
 
 @dataclass

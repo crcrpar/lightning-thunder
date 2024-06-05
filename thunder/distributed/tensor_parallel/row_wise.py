@@ -10,6 +10,7 @@ from thunder.core import utils
 from thunder.core.proxies import DistParallelType
 from thunder.core.proxies import TensorProxy
 from thunder.core.proxies import variableify
+from thunder.core.symbol import BoundSymbol
 from thunder.distributed.tensor_parallel.common import PrePostProcessInterface
 from thunder.distributed.tensor_parallel.common import ComputationTraceTransformVisitorForTensorParallel
 from thunder.distributed.tensor_parallel.common import TransformForTensorParallel
@@ -23,7 +24,6 @@ if TYPE_CHECKING:
     from thunder.core.symbol import BoundSymbol
     from thunder.core.trace import TraceCtx
     from thunder.core.trace import TraceProvenance
-    from thunder.core.transforms import VISIT_TYPE
 
 
 __all__ = [
@@ -78,6 +78,10 @@ class RowParallelLinearPrePostProcess(PrePostProcessInterface):
         else:
             return super().maybe_modify_args_and_kwargs(bsym)
 
+    @property
+    def requires_output_shape_update(self) -> bool:
+        False
+
 
 @dataclass
 class RowParallelEmbeddingPreProcess(PrePostProcessInterface):
@@ -96,6 +100,10 @@ class RowParallelEmbeddingPreProcess(PrePostProcessInterface):
             self.process_group,
             RowParallelEmbeddingPreProcess.layer_type,
         )
+
+    @property
+    def requires_output_shape_update(self) -> bool:
+        True
 
 
 @dataclass
