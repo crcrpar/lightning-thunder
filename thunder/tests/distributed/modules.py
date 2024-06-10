@@ -315,11 +315,13 @@ class ParallelAttention(nn.Module):
         multiy_query_attention: bool = False,
         normalize_attention_scores: bool = True,
         process_group: ProcessGroup | None = None,
+        multi_query_attention: bool = False,
+        use_flash_attention: bool = False,
     ):
         super().__init__()
         self.layer_number = max(1, layer_number)
         self.attention_type = attention_type
-        self.attn_mask_type = attn_mask_type
+        self.attn_mask_type = attention_mask_type
         self.normalize_attention_scores = normalize_attention_scores
         self.position_embedding_type = position_embedding_type
         self.multi_query_attention = multi_query_attention
@@ -429,3 +431,222 @@ class ParallelAttention(nn.Module):
     @property
     def row_wise(self) -> tuple[str, ...]:
         return ("dense",)
+
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        attention_mask: torch.Tensor,
+        layer_past=None,
+        get_key_value=False,
+        encoder_output=None,
+        set_inference_key_value_memory=False,
+        inference_max_sequence_len=None,
+        rotary_pos_emb=None,  # rotary positional embedding
+        relative_position_bias=None,
+        checkpoint_core_attention=False,
+    ):
+        # hidden_states: [sq, b, h]
+
+        # =================================================
+        # Pre-allocate memory for key-values for inference.
+        # =================================================
+        if set_inference_key_value_memory:
+            assert inference_max_sequence_len and inference_max_sequence_len > 0
+            self.inference_key_memory = self._allocate_memory(
+                inference_max_sequence_len, hidden_states.size(1), hidden_states.dtype, hidden_states.device
+            )
+            self.inference_value_memory = self._allocate_memory(
+                inference_max_sequence_len, hidden_states.size(1), hidden_states.dtype, hidden_states.device
+            )
+            self.inference_current_sequence_len = 0
+
+        # Some consistency check.
+        if inference_max_sequence_len:
+            assert self.inference_current_sequence_len < self.inference_key_memory.size(0)
+            assert inference_max_sequence_len == self.inference_key_memory.size(0)
+        # This is added for safety. In case inference_max_sequence_len
+        # is not provided, make sure there is no potential memory left
+        # from previous inference.
+        if not inference_max_sequence_len:
+            self.inference_key_memory = None
+            self.inference_value_memory = None
+
+        # =====================
+        # Query, Key, and Value
+        # =====================
+
+        if self.attention_type == SELF_ATTN:
+            # Attention heads [sq, b, h] --> [sq, b, (np * 3 * hn)]
+            mixed_x_layer, _ = self.query_key_value(hidden_states)
+            if self.is_adapter_available():
+                lora_kqv_adapter = self.get_adapter_module(AdapterName.LORA_KQV_ADAPTER)
+                if lora_kqv_adapter and self.adapter_cfg[AdapterName.LORA_KQV_ADAPTER]["enabled"]:
+                    lora_mixed_x_layer = lora_kqv_adapter(hidden_states)
+                    mixed_x_layer = mixed_x_layer + lora_mixed_x_layer
+
+            # [sq, b, (np * 3 * hn)] --> [sq, b, np, 3 * hn]
+            new_tensor_shape = mixed_x_layer.size()[:-1] + (
+                self.num_attention_heads_per_partition,
+                3 * self.hidden_size_per_attention_head,
+            )
+            if self.megatron_legacy:
+                mixed_x_layer = self._transpose_last_dim(mixed_x_layer, 3, True)
+            mixed_x_layer = mixed_x_layer.view(*new_tensor_shape)
+
+            # [sq, b, np, 3 * hn] --> 3 [sq, b, np, hn]
+            (query_layer, key_layer, value_layer) = tensor_parallel.split_tensor_along_last_dim(
+                mixed_x_layer, 3, contiguous_split_chunks=True
+            )
+        else:
+            # Attention heads [sk, b, h] --> [sk, b, (np * 2 * hn)]
+            mixed_kv_layer, _ = self.key_value(encoder_output)
+            if self.is_adapter_available():
+                lora_kv_adapter = self.get_adapter_module(AdapterName.LORA_KV_ADAPTER)
+                if lora_kv_adapter and self.adapter_cfg[AdapterName.LORA_KV_ADAPTER]["enabled"]:
+                    lora_mixed_kv_layer = lora_kv_adapter(encoder_output)
+                    mixed_kv_layer = mixed_kv_layer + lora_mixed_kv_layer
+
+            # [sk, b, (np * 2 * hn)] --> [sk, b, np, 2 * hn]
+            new_tensor_shape = mixed_kv_layer.size()[:-1] + (
+                self.num_attention_heads_per_partition,
+                2 * self.hidden_size_per_attention_head,
+            )
+            if self.megatron_legacy:
+                mixed_kv_layer = self._transpose_last_dim(mixed_kv_layer, 2, True)
+            mixed_kv_layer = mixed_kv_layer.view(*new_tensor_shape)
+
+            # [sk, b, np, 2 * hn] --> 2 [sk, b, np, hn]
+            (key_layer, value_layer) = tensor_parallel.split_tensor_along_last_dim(
+                mixed_kv_layer, 2, contiguous_split_chunks=True
+            )
+
+            # Attention head [sq, b, h] --> [sq, b, hp]
+            query_layer, _ = self.query(hidden_states)
+            if self.is_adapter_available():
+                lora_q_adapter = self.get_adapter_module(AdapterName.LORA_Q_ADAPTER)
+                if lora_q_adapter and self.adapter_cfg[AdapterName.LORA_Q_ADAPTER]["enabled"]:
+                    lora_q_layer = lora_q_adapter(hidden_states)
+                    query_layer = query_layer + lora_q_layer
+            # [sq, b, hp] --> [sq, b, np, hn]
+            new_tensor_shape = query_layer.size()[:-1] + (
+                self.num_attention_heads_per_partition,
+                self.hidden_size_per_attention_head,
+            )
+            query_layer = query_layer.view(*new_tensor_shape)
+
+        if self.is_adapter_available():
+            key_infused_adapter = self.get_adapter_module(AdapterName.KEY_INFUSED)
+            value_infused_adapter = self.get_adapter_module(AdapterName.VALUE_INFUSED)
+            if key_infused_adapter and self.adapter_cfg[AdapterName.KEY_INFUSED]["enabled"]:
+                assert value_infused_adapter is not None, "Expected value_infused_adapter not found!"
+                kls = key_layer.shape
+                key_layer = key_infused_adapter(key_layer.reshape(kls[0], kls[1], -1)).reshape(kls)
+            if value_infused_adapter and self.adapter_cfg[AdapterName.VALUE_INFUSED]["enabled"]:
+                assert key_infused_adapter is not None, "Expected key_infused_adapter not found!"
+                vls = value_layer.shape
+                value_layer = value_infused_adapter(value_layer.reshape(vls[0], vls[1], -1)).reshape(vls)
+
+        # ===================================================
+        # Adjust key, value, and attention mask for inference
+        # ===================================================
+
+        # duplicate the pos_emb for self attention
+        if rotary_pos_emb is not None:
+            rotary_pos_emb = rotary_pos_emb if isinstance(rotary_pos_emb, tuple) else ((rotary_pos_emb,) * 2)
+
+        if inference_max_sequence_len:
+            # Adjust the range variables.
+            start = self.inference_current_sequence_len
+            self.inference_current_sequence_len += key_layer.size(0)
+            end = self.inference_current_sequence_len
+            # Copy key and values.
+            self.inference_key_memory[start:end, ...] = key_layer
+            self.inference_value_memory[start:end, ...] = value_layer
+            key_layer = self.inference_key_memory[:end, ...]
+            value_layer = self.inference_value_memory[:end, ...]
+            # Adjust attention mask
+            if attention_mask is not None:
+                attention_mask = attention_mask[..., start:end, :end]
+            # adjust the key rotary positional embedding
+            if rotary_pos_emb is not None:
+                q_pos_emb, k_pos_emb = rotary_pos_emb
+                if not set_inference_key_value_memory:
+                    # In inference, we compute one token at a time.
+                    # Select the correct positional embedding.
+                    q_pos_emb = q_pos_emb[end - 1 : end]
+                else:
+                    q_pos_emb = q_pos_emb[:end, :, :, :]
+                k_pos_emb = k_pos_emb[:end, :, :, :]
+                rotary_pos_emb = (q_pos_emb, k_pos_emb)
+
+        if layer_past is not None:
+            past_key, past_value = layer_past
+            key_layer = torch.cat((past_key.type_as(key_layer), key_layer), dim=0)
+            value_layer = torch.cat((past_value.type_as(value_layer), value_layer), dim=0)
+
+        if get_key_value:
+            present = (key_layer, value_layer)
+
+        if (
+            flash_attn_with_kvcache is not None
+            and self.use_flash_attention
+            and rotary_pos_emb is not None
+            and inference_max_sequence_len
+            and not set_inference_key_value_memory
+        ):
+            # Mainly used for decoding with sq=1
+            q = _cast_if_autocast_enabled(
+                rearrange(apply_rotary_pos_emb(query_layer, rotary_pos_emb[0]), "sq b np hn -> b sq np hn")
+            )
+            k = _cast_if_autocast_enabled(
+                rearrange(apply_rotary_pos_emb(key_layer, rotary_pos_emb[1]), "sk b np hn -> b sk np hn")
+            )
+            v = _cast_if_autocast_enabled(rearrange(value_layer, "sk b np hn -> b sk np hn"))
+            context_layer = flash_attn_with_kvcache(
+                q=q,
+                k_cache=k,
+                v_cache=v,
+                causal=self.attn_mask_type == AttnMaskType.causal,
+            )
+            context_layer = rearrange(context_layer, "b sq np hn -> sq b (np hn)")
+
+        elif checkpoint_core_attention:
+            context_layer = self._checkpointed_attention_forward(
+                query_layer,
+                key_layer,
+                value_layer,
+                attention_mask,
+                rotary_pos_emb=rotary_pos_emb,
+                relative_position_bias=relative_position_bias,
+                headscale_tensor=self.head_scale_tensor if self.headscale else None,
+                inference_mode=inference_max_sequence_len is not None and query_layer.shape[0] == 1,
+            )
+        else:
+            context_layer = self.core_attention(
+                query_layer,
+                key_layer,
+                value_layer,
+                attention_mask,
+                layer_past=layer_past,
+                get_key_value=get_key_value,
+                rotary_pos_emb=rotary_pos_emb,
+                relative_position_bias=relative_position_bias,
+                headscale_tensor=self.head_scale_tensor if self.headscale else None,
+                inference_mode=inference_max_sequence_len is not None and query_layer.shape[0] == 1,
+            )
+
+        # =================
+        # Output. [sq, b, h]
+        # =================
+
+        output, bias = self.dense(context_layer)
+        if self.is_adapter_available():
+            lora_dense_adapter = self.get_adapter_module(AdapterName.LORA_DENSE_ATTENTION_ADAPTER)
+            if lora_dense_adapter and self.adapter_cfg[AdapterName.LORA_DENSE_ATTENTION_ADAPTER]["enabled"]:
+                lora_dense_output = lora_dense_adapter(context_layer)
+                output = output + lora_dense_output
+
+        if get_key_value:
+            output = [output, present]
+
+        return output, bias
