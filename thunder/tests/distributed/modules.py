@@ -76,7 +76,6 @@ class CoreAttention(nn.Module):
 
     def __init__(
         self,
-        config,
         layer_number: int,
         num_attention_heads: int,
         hidden_size: int,
@@ -299,7 +298,6 @@ class ParallelAttention(nn.Module):
 
     def __init__(
         self,
-        config,
         layer_number: int,
         num_attention_heads: int,
         hidden_size: int,
@@ -382,7 +380,6 @@ class ParallelAttention(nn.Module):
             self._column_wise = ("query", "key_value")
 
         self.core_attention = CoreAttention(
-            config=config,
             layer_number=self.layer_number,
             num_attention_heads=num_attention_heads,
             hidden_size=hidden_size,
