@@ -1750,6 +1750,7 @@ if torch.distributed.is_available():
         group: torch.distributed.ProcessGroup,
         do_async: Number,
         dim: int | None = None,
+        output: torch.Tensor | None = None,
     ) -> torch.Tensor | tuple[torch.distributed.distributed_c10d.Work, torch.Tensor]:
         result_shape = list(a.shape)
         if dim is not None:
@@ -1758,7 +1759,7 @@ if torch.distributed.is_available():
             result_shape[dim] *= group.size()
         else:
             result_shape[0] *= group.size()
-        out: torch.Tensor = torch.empty(result_shape, dtype=a.dtype, device=a.device)
+        out: torch.Tensor = torch.empty(result_shape, dtype=a.dtype, device=a.device) if output is None else output
         do_async: bool = bool(do_async)
 
         handle: None | torch.distributed.distributed_c10d.Work = torch.distributed.all_gather_into_tensor(
@@ -1812,6 +1813,7 @@ if torch.distributed.is_available():
         group: torch.distributed.ProcessGroup,
         do_async: Number,
         dim: int | None,
+        output: torch.Tensor | None = None,
     ) -> torch.Tensor | tuple[torch.distributed.distributed_c10d.Work, torch.Tensor]:
         result_shape = list(a.shape)
         if dim is not None:
@@ -1820,7 +1822,7 @@ if torch.distributed.is_available():
             result_shape[dim] //= group.size()
         else:
             result_shape[0] //= group.size()
-        out = torch.empty(result_shape, dtype=a.dtype, device=a.device)
+        out = torch.empty(result_shape, dtype=a.dtype, device=a.device) if output is None else output
         op: torch.distributed.ReduceOp = ltorch.to_torch_distributed_reduce_op(op)
         do_async: bool = bool(do_async)
 

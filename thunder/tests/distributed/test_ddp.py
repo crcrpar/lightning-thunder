@@ -187,13 +187,17 @@ class CompileDDPTest(DataParallelTestCase):
         process_group = c10d.new_group()
 
         # NOTE Preprocessing is disabled because we call thunder.torch operations directly
-        cfoo = thunder.jit(lc_foo, executors=_executor.executors_list())
+        # cfoo = thunder.jit(lc_foo, executors=_executor.executors_list())
+        cfoo = thunder.jit(foo, executors=_executor.executors_list())
 
         for op, async_op in product((None, torch.distributed.ReduceOp.SUM), (False, True)):
             expected = foo(a, b, op, process_group, async_op)
             actual = cfoo(a, b, op, process_group, async_op)
 
             self.assertEqual(actual, expected)
+        if self.rank == 0:
+            print(thunder.last_traces(cfoo)[-1])
+        assert False
 
     @common_utils.parametrize("executor,dim", product(tuple(executors_map.keys()), (None, 0, 1)))
     def test_all_gather(self, executor, dim: int | None):

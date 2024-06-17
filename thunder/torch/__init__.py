@@ -4907,6 +4907,22 @@ if torch.distributed.is_available():
 
         return dist_prims.all_gather(a, group, async_op, dim=dim)
 
+    @torchsymbol(
+        torch.distributed.all_gather_into_tensor,
+        is_method=False,
+        id="all_gather_into_tensor",
+        tags=(prims.OpTags.IN_PLACE,),
+    )
+    def all_gather_into_tensor(
+        output_tensor: TensorLike,
+        input_tensor: TensorLike,
+        group: torch.distributed.ProcessGroup | None = None,
+        async_op: bool = False,
+    ) -> TensorLike | FutureTensorLike:
+        group = group if group is not None else torch.distributed.new_group()
+
+        return dist_prims.all_gather(input_tensor, group, async_op, dim=None, output=output_tensor)
+
     # NOTE torch.distributed.all_reduce is an inplace operation (although the underlying NCCL
     #   call does not need to be inplace). This, however, is modeled as an out-of-place functional
     #   operation, hence the id "functional_all_reduce", and why we do not translate PyTorch
@@ -4929,6 +4945,24 @@ if torch.distributed.is_available():
         group = group if group is not None else torch.distributed.new_group()
 
         return dist_prims.all_reduce(a, op, group, async_op)
+
+    @torchsymbol(
+        torch.distributed.all_reduce,
+        is_method=False,
+        id="all_reduce",
+        tags=(prims.OpTags.IN_PLACE,),
+    )
+    def inplace_all_reduce(
+        a: TensorLike,
+        /,
+        op: DistributedReduceOpLike = torch.distributed.ReduceOp.SUM,
+        group: None | torch.distributed.ProcessGroup = None,
+        async_op: bool = False,
+    ):
+        op = to_thunder_distributed_reduce_op(op)
+        group = group if group is not None else torch.distributed.new_group()
+
+        return dist_prims.all_reduce(a, op, group, async_op, skip_clone=True)
 
     @torchsymbol(
         is_method=False,
@@ -4959,6 +4993,24 @@ if torch.distributed.is_available():
         group = group if group is not None else torch.distributed.new_group()
 
         return dist_prims.reduce_scatter(a, op, group, async_op, dim=dim)
+
+    @torchsymbol(
+        torch.distributed.reduce_scatter_tensor,
+        is_method=False,
+        id="reduce_scatter_tensor",
+        tags=(prims.OpTags.IN_PLACE,),
+    )
+    def reduce_scatter_tensor(
+        output: TensorLike,
+        input: TensorLike,
+        op: DistributedReduceOpLike | None = None,
+        group: torch.distributed.ProcessGroup | None = None,
+        async_op: bool = False,
+    ) -> TensorLike | FutureTensorLike:
+        op = to_thunder_distributed_reduce_op(op)
+        group = group if group is not None else torch.distributed.new_group()
+
+        return dist_prims.reduce_scatter(input, op, group, async_op, dim=None, output=output)
 
 else:
 

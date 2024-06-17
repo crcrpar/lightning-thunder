@@ -65,11 +65,13 @@ def all_gather_meta(
     group: torch.distributed.ProcessGroup,
     do_async: Number,
     dim: int | None = None,
+    output: TensorProxy | None = None,
 ) -> TensorProxy:
     check_if_distributed_available()
     utils.check_type(a, TensorProxy)
     utils.check_type(group, torch.distributed.ProcessGroup)
     utils.check(pytype(do_async) is bool, lambda: f"Expected {do_async=} to be a boolean value")
+    utils.check(dim is None or output is None, lambda: f"{dim=} and {output=} could not be used together")
 
     if dim is not None:
         utils.check_type(dim, int)
@@ -78,11 +80,16 @@ def all_gather_meta(
         result_shape[dim] *= group.size()
     else:
         result_shape = a.shape[0] * group.size(), *a.shape[1:]
+        if output is not None:
+            utils.check_same_dtype(output, a)
+            utils.check_same_device(output, a)
+            utils.check(output.shape == result_shape, lambda: f"{output.shape=} does not match {result_shape=}")
 
+    like_t = a if output is None else output
     if do_async:
-        return FutureTensorProxy(shape=result_shape, like=a)
+        return FutureTensorProxy(shape=result_shape, like=like_t)
 
-    return TensorProxy(shape=result_shape, like=a)
+    return TensorProxy(shape=result_shape, like=like_t)
 
 
 # NOTE This is essentially a wrapper around
@@ -133,12 +140,14 @@ def reduce_scatter(
     group: torch.distributed.ProcessGroup,
     do_async: Number,
     dim: int | None = None,
+    output: TensorProxy | None = None,
 ) -> TensorProxy:
     check_if_distributed_available()
     utils.check_type(a, TensorProxy)
     utils.check_type(op, DistributedReduceOps)
     utils.check_type(group, torch.distributed.ProcessGroup)
     utils.check(pytype(do_async) is bool, lambda: f"Expected {do_async=} to be a boolean value")
+    utils.check(dim is None or output is None, lambda: f"{dim=} and {output=} could not be used together")
 
     result_shape = list(a.shape)
     if dim is not None:
@@ -153,11 +162,16 @@ def reduce_scatter(
         utils.check(
             a.shape[0] % group.size() == 0, lambda: f"Expected {a.shape[0]=} to be divisible by {group.size()=}"
         )
+        if output is not None:
+            utils.check_same_dtype(output, a)
+            utils.check_same_device(output, a)
+            utils.check(output.shape == result_shape, lambda: f"{output.shape=} does not match {result_shape=}")
 
+    like_t = a if output is None else output
     if do_async:
-        return FutureTensorProxy(shape=result_shape, like=a)
+        return FutureTensorProxy(shape=result_shape, like=like_t)
 
-    return TensorProxy(shape=result_shape, like=a)
+    return TensorProxy(shape=result_shape, like=like_t)
 
 
 # NOTE This is a very particular implementation of wait that may need to be
