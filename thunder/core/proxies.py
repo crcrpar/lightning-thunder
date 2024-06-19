@@ -12,6 +12,7 @@ import builtins
 import math
 
 import torch
+import torch.distributed
 
 from thunder.core.compile_data import using_symbolic_values, using_jit
 from thunder.core.interpreter import is_jitting
@@ -999,6 +1000,16 @@ class FloatProxy(NumberProxy):
         return f"[FloatProxy name={self.name}, value={self.value}]"
 
 
+class DistCommWorkProxy(Proxy):
+
+    def __init__(self, x, name: str | None = None, history: None | tuple = None) -> None:
+        self.x = x
+        super().__init__(name=name, history=history)
+
+    def replace_name(self, name: str | None = None):
+        return self.__class__(self.x, name=name, history=self.history)
+
+
 class DistParallelType(Enum):
     NONE = auto()
     REPLICATED = auto()
@@ -1648,5 +1659,9 @@ def proxy(x: Any, *, name: str | None = None, history: None | tuple = None) -> A
         return AnyProxy(x, name=name, history=history)
     if isinstance(x, torch.device):
         return AnyProxy(x, name=name, history=history)
+
+    if isinstance(x, torch.distributed.Work):
+        print(f"### torch.distributed.Work {x = }")
+        return DistCommWorkProxy(x, name=name, history=history)
 
     return x

@@ -9,7 +9,7 @@ import torch.distributed
 import thunder.core.utils as utils
 from thunder.core.prims import make_prim
 
-from thunder.core.proxies import DistParallelType, FutureTensorProxy, pytype, TensorProxy
+from thunder.core.proxies import DistParallelType, FutureTensorProxy, pytype, TensorProxy, DistCommWorkProxy
 from thunder.core.transforms import register_augmented_forward, register_backward
 from thunder.distributed import get_skip_data_parallel_grad_sync
 
@@ -35,6 +35,9 @@ class PrimIDs(Enum):
 
     SYNCHRONIZE_TENSOR_PARALLEL_OUTPUT = auto()
     SYNCHRONIZE_TENSOR_PARALLEL_INPUT = auto()
+
+    INPLACE_ASYNC_ALL_REDUCE = auto()
+    WORK_WAIT = auto()
 
 
 # This enum describes what all_reduce (below) will actually do
@@ -131,6 +134,23 @@ def all_reduce_meta(
         return FutureTensorProxy(like=a)
 
     return TensorProxy(like=a)
+
+
+def inplace_async_all_reduce_meta(
+    a: TensorProxy,
+    /,
+    op: DistributedReduceOps,
+    group: torch.distributed.ProcessGroup,
+    do_async: Number,
+) -> DistCommWorkProxy:
+    utils.check(pytype(do_async) is bool, lambda: f"Expected {do_async=} to be a boolean value")
+    check_if_distributed_available()
+    utils.check_type(a, TensorProxy)
+    utils.check_type(op, DistributedReduceOps)
+    utils.check_type(group, torch.distributed.ProcessGroup)
+    utils.check(pytype(do_async) is bool, lambda: f"Expected {do_async=} to be a boolean value")
+
+    return DistCommWorkProxy(a)
 
 
 def broadcast_meta(
@@ -396,6 +416,9 @@ def synchronize_tensor_parallel_input_meta(
 
 all_gather = make_prim(PrimIDs.ALL_GATHER, "all_gather", meta=all_gather_meta)
 all_reduce = make_prim(PrimIDs.ALL_REDUCE, "all_reduce", meta=all_reduce_meta)
+inplace_async_all_reduce = make_prim(
+    PrimIDs.INPLACE_ASYNC_ALL_REDUCE, "inplace_async_all_reduce", meta=inplace_async_all_reduce_meta
+)
 broadcast = make_prim(PrimIDs.BROADCAST, "broadcast", meta=broadcast_meta)
 reduce_scatter = make_prim(PrimIDs.REDUCE_SCATTER, "reduce_scatter", meta=reduce_scatter)
 synchronize = make_prim(PrimIDs.SYNCHRONIZE, "synchronize", meta=synchronize_meta)

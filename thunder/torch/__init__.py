@@ -34,6 +34,7 @@ from thunder.core.proxies import (
     TensorProxy,
     FutureTensorProxy,
     pyval,
+    DistCommWorkProxy,
 )
 from thunder.core.pytree import tree_map
 from thunder.core.symbol import Symbol
@@ -5007,17 +5008,16 @@ if torch.distributed.is_available():
         op: DistributedReduceOpLike = torch.distributed.ReduceOp.SUM,
         group: torch.distributed.ProcessGroup | None = None,
         async_op: bool = False,
-    ) -> TensorLike:
-        utils.check(
-            not async_op,
-            lambda: f"`torch.distributed.all_reduce` with {async_op=} is not supported",
-            NotImplementedError,
-        )
+    ) -> TensorLike | DistCommWorkProxy:
+        # utils.check(not async_op, lambda: f"`torch.distributed.all_reduce` with {async_op=} is not supported", NotImplementedError)
         op = to_thunder_distributed_reduce_op(op)
         group = group if group is not None else torch.distributed.new_group()
 
-        out = dist_prims.all_reduce(a, op, group, async_op, skip_clone=True)
-        return prims.copy_(out, a)
+        if not async_op:
+            out = dist_prims.all_reduce(a, op, group, async_op, skip_clone=True)
+            return prims.copy_(out, a)
+        else:
+            return dist_prims.inplace_async_all_reduce(a, op, group, async_op)
 
     @torchsymbol(
         is_method=False,
@@ -5071,6 +5071,17 @@ if torch.distributed.is_available():
         group = group if group is not None else torch.distributed.new_group()
         out = dist_prims.reduce_scatter(input, op, group, async_op, dim=None, output_tensor=output)
         return prims.copy_(out, output)
+
+    @torchsymbol(
+        torch.distributed.Work.wait,
+        is_method=True,
+        id="wait",
+        tags=(prims.OpTags.DONT_DCE,),
+    )
+    def wait(
+        work: DistCommWorkProxy,
+    ) -> None:
+        return dist_prims.work_wait(work)
 
 else:
 
