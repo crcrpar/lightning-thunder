@@ -2,16 +2,18 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from functools import partial
+from itertools import product
 from typing import TYPE_CHECKING
 
 import pytest
+import torch.nn as nn
 import torch.testing
 
 import thunder
 import thunder.core.devices as devices
 from thunder.core import dtypes
 from thunder.core.prims import PrimIDs
-from thunder.tests.framework import instantiate, ops, requiresCUDA, NOTHING, TorchExecutor
+from thunder.tests.framework import instantiate, ops, requiresCUDA, NOTHING, TorchExecutor, nvFuserExecutor
 from thunder.tests.opinfos import opinfos, OpInfo, make_number, SampleInput
 from thunder.tests.make_tensor import make_tensor
 from thunder.torch import _torch_to_thunder_function_map, _inplace_to_out_of_place
@@ -131,12 +133,71 @@ def test_functionalization(op: OpInfo, device: str, dtype: dtypes.dtype, executo
     )
 
 
+class ConvBn(nn.Module):
+    def __init__(self, num_features: int, inplace: bool = True) -> None:
+        super().__init__()
+        self.conv = nn.Conv2d(num_features, num_features, 3, 1, 1, bias=False)
+        self.bn = nn.BatchNorm2d(num_features)
+        self.relu = nn.ReLU(inplace=inplace)
+
+    def forward(self, x):
+        return self.bn(self.relu(self.conv(x)))
+
+
 @pytest.fixture
 def turn_off_tf32_and_set_seed(monkeypatch):
     import torch
 
     monkeypatch.setenv("NVIDIA_TF32_OVERRIDE", "0")
     torch.manual_seed(42)
+
+
+@instantiate(
+    dtypes=(thunder.float32,),
+    decorators=(pytest.mark.parametrize("train", (False, True)),),
+)
+@requiresCUDA
+def test_conv_bn_block(executor, device, dtype, turn_off_tf32_and_set_seed, train: bool):
+    from contextlib import nullcontext
+    import thunder
+
+    num_features = 64
+    tdtype = thunder.torch.to_torch_dtype(dtype)
+    model = ConvBn(num_features).to(device=device, dtype=tdtype)
+    ref_model = ConvBn(num_features).to(device=device, dtype=tdtype)
+    if not train:
+        model = model.eval()
+        ref_model = ref_model.eval()
+        ctx = torch.no_grad
+    else:
+        model = model.train()
+        ref_model = ref_model.train()
+        ctx = nullcontext
+    ref_model.load_state_dict(model.state_dict())
+
+    jitted = executor.make_callable(model)
+    x = make_tensor((1, num_features, 224, 224), dtype=tdtype, device=device, requires_grad=train)
+    x_ref = x.clone().detach().requires_grad_(train)
+
+    with ctx():
+        actual = jitted(x)
+        expected = ref_model(x_ref)
+    torch.testing.assert_close(actual, expected)
+
+    if train:
+
+        if executor != TorchExecutor:
+            ctx = pytest.raises(RuntimeError, match="Unsupported iterable object type for")
+        else:
+            ctx = nullcontext()
+        with ctx:
+            actual.sum().backward()
+            expected.sum().backward()
+            for name, ref_p in ref_model.named_parameters():
+                if ref_p.grad is None:
+                    continue
+                param = jitted.get_parameter(name)
+                torch.testing.assert_close(param.grad, ref_p.grad, msg=lambda s: f"{name} - {s}")
 
 
 @instantiate(
