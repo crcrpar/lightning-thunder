@@ -12,9 +12,11 @@ from thunder.core.proxies import TensorProxy
 from thunder.core.transform_common import Transform
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
     from typing import Any
     from torch.distributed import ProcessGroup
     from thunder.common import CompileData
+    from thunder.core.module import ThunderModule
     from thunder.core.proxies import ProxyInterface
     from thunder.core.symbol import BoundSymbol
     from thunder.core.trace import TraceCtx
@@ -167,6 +169,10 @@ class TransformForTensorParallel(Transform):
     compile_data: CompileData
     chunked_param_name_to_layer_type: dict[str, Any]
     process_group: ProcessGroup
+    module_names: Sequence[str] = []
+    enable_transform_module: bool = False
+    dim_to_shard: int = 0
+    chunked_param_name_to_layer_type: dict[str, Any] = field(init=False, default_factory=dict)
 
     def __post_init__(self):
         from thunder.common import CompileData
@@ -188,6 +194,68 @@ class TransformForTensorParallel(Transform):
     @property
     @abstractmethod
     def distparallel_type(self) -> DistParallelType: ...
+
+    def transform_module(self, model: ThunderModule) -> None:
+        import torch
+        import torch.nn as nn
+        from thunder.core import utils
+        from thunder.distributed import _shard_tensor
+
+        if not self.enable_transform_module:
+            return model
+
+        device = torch.device("cuda", self.rank)
+        for target_mod_name in self.module_names:
+            mod = model.get_submodule(target_mod_name)
+            utils.check_type(
+                mod,
+                (
+                    nn.Linear,
+                    nn.Embedding,
+                ),
+            )
+            for name, p in mod.named_parameters(recurse=False):
+                fqn = f"{target_mod_name}.{name}"
+                if p.ndim <= self.dim_to_shard:
+                    continue
+
+                param = p
+                if p.is_meta:
+                    p._thunder_device = device
+                elif p.device != device:
+                    with torch.no_grad():
+                        new_p = torch.nn.Parameter(p.to(device=device), requires_grad=p.requires_grad)
+                    model._overrides_parameters[fqn] = new_p
+                    param = new_p
+
+                orig_param = None
+                try:
+                    orig_param = model._model.get_parameter(fqn)
+                except AttributeError:
+                    pass
+
+                new_shape = list(param.shape)
+                new_shape[self.dim_to_shard] //= self.world_size
+                self.chunked_param_name_to_layer_type["t_" + fqn.replace(".", "_")] = (
+                    type(mod),
+                    tuple(orig_param.shape),
+                    tuple(new_shape),
+                )
+                p_new, _ = _shard_tensor(
+                    param, self.rank, self.world_size, name, allow_padding_for_fsdp=False, dim=self.dim_to_shard
+                )
+                p_new = torch.nn.Parameter(p_new.clone(), requires_grad=p.requires_grad)
+                model._overrides_parameters[fqn] = p_new
+
+                if orig_param is not None:
+                    if not orig_param.is_meta:
+                        p_meta = torch.nn.Parameter(
+                            orig_param.to(device="meta"), requires_grad=orig_param.requires_grad
+                        )
+                        p_meta._thunder_Device = device
+                        model._model.register_parameter(fqn, p_meta)
+                    else:
+                        orig_param._thunder_device = device
 
     def transform_traces_pre_prologue(
         self,
