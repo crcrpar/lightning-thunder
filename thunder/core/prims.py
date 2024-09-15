@@ -66,6 +66,7 @@ from thunder.core.proxies import (
     CONSTRAINT,
     CollectionProxy,
     TensorProxy,
+    TorchAoFloat8TensorProxy,
     NumberProxy,
     is_proxyable,
     proxy,
@@ -271,6 +272,8 @@ class PrimIDs(Enum):
     COPY_ = auto()
     #
     SINK = auto()
+    # Subclasses
+    TORCHAO_FLOAT8_TENSOR = auto()
 
 
 class OpTags(Enum):
@@ -4036,3 +4039,31 @@ def sink_meta(*args, **kwargs):
 
 # TODO do we want another tag to remove this after prologue is constructed?
 sink = make_prim(PrimIDs.SINK, "sink", meta=sink_meta, tags=(OpTags.DONT_DCE,))
+
+
+def _torchao_float8_tensor_meta(
+    data: TensorProxy,
+    scale: TensorProxy,
+    orig_dtype: dtypes.dtype,
+    linear_mm_config: Any | None,
+    gemm_input_role: Any | None = None,
+) -> TorchAoFloat8TensorProxy:
+    utils.check_type(data, TensorProxy)
+    utils.check_type(scale, TensorProxy)
+    utils.check_type(orig_dtype, dtypes.dtype)
+    utils.check(
+        data.dtype in dtypes.float_8bit_dtypes,
+        lambda: f"{data.dtype=} expected tobe {dtypes.float_8bit_dtypes}",
+    )
+    utils.check(scale._numel == 1, lambda: f"{scale._numel=} expected to be 1")
+    utils.check(scale.dtype == dtypes.float32, lambda: f"{scale.dtype=} expected to be {dtypes.float32}")
+    return TorchAoFloat8TensorProxy(
+        data=data,
+        scale=scale,
+        orig_dtype=orig_dtype,
+        linear_mm_config=linear_mm_config,
+        gemm_input_role=gemm_input_role,
+        shape=tuple(data.shape),
+        device=devices.to_device(data.device),
+        dtype=orig_dtype,
+    )

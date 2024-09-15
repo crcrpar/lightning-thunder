@@ -14,6 +14,7 @@ from typing import Any, overload
 from types import NoneType, ModuleType
 from collections.abc import Callable
 
+from lightning_utilities.core.imports import package_available
 import opt_einsum
 
 # Initializes the language context
@@ -5734,3 +5735,52 @@ _syms_returning_views: set[Symbol] = {
 
 # Add all auto-registered torch operators symbol that return tensor views to _syms_returning_views
 _syms_returning_views.update({_torch_to_thunder_function_map[x] for x in _auto_registered_operators_returning_views})
+
+
+if package_available("torchao"):
+    from torchao.float8 import Float8Tensor, GemmInputRole, LinearMMConfig
+
+    @torchsymbol(
+        Float8Tensor.__new__,
+        id="torchao.float8.float8_tensor.Float8Tensor.__new__",
+    )
+    def _torchao_float8tensor_new(
+        cls,
+        data: TensorLike,
+        scale: TensorLike,
+        orig_dtype: dtypeLike,
+        linear_mm_config: LinearMMConfig | None,
+        gemm_input_role: GemmInputRole | None = GemmInputRole.INPUT,
+    ):
+        _linear_mm_config = linear_mm_config if linear_mm_config is not None else LinearMMConfig()
+        _gemm_input_role = gemm_input_role if gemm_input_role is not None else GemmInputRole.INPUT
+
+        return prims.torchao_float8_tensor(
+            data=data,
+            scale=scale,
+            orig_dtype=orig_dtype,
+            linear_mm_config=linear_mm_config,
+            gemm_input_role=gemm_input_role,
+        )
+
+    @torchsymbol(
+        Float8Tensor.__init__,
+        id="torchao.float8.float8_tensor.Float8Tensor.__init__",
+    )
+    def _torchao_float8tensor_init(
+        data: TensorLike,
+        scale: TensorLike,
+        orig_dtype: dtypeLike,
+        linear_mm_config: LinearMMConfig | None,
+        gemm_input_role: GemmInputRole | None = GemmInputRole.INPUT,
+    ):
+        _linear_mm_config = linear_mm_config if linear_mm_config is not None else LinearMMConfig()
+        _gemm_input_role = gemm_input_role if gemm_input_role is not None else GemmInputRole.INPUT
+
+        return prims.torchao_float8_tensor(
+            data=data,
+            scale=scale,
+            orig_dtype=orig_dtype,
+            linear_mm_config=linear_mm_config,
+            gemm_input_role=gemm_input_role,
+        )

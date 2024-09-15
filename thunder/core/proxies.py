@@ -5,12 +5,12 @@ from numbers import Number
 from typing import Type, Optional, Any, Tuple, List, Union
 from collections.abc import Callable
 from collections.abc import Sequence
-
 from functools import reduce, partial
 import operator
 import builtins
 import math
 
+from lightning_utilities.core.imports import package_available
 import torch
 
 from thunder.core.compile_data import using_symbolic_values, using_jit
@@ -1858,6 +1858,102 @@ class TensorProxy(Proxy, TensorProxyInterface):
         return method(self)
 
 
+class TorchAoFloat8TensorProxy(Proxy, TensorProxyInterface):
+    def __init__(
+        self,
+        data: TensorProxy,
+        scale: TensorProxy,
+        name: str | None = None,
+        *,
+        orig_dtype: dtypes.dtype,
+        linear_mm_config: Any,
+        gemm_input_role,
+        like: TensorProxy | FutureTensorProxy | None = None,
+        shape: ShapeLike | None = None,
+        device: devices.Device | None = None,
+        dtype: dtypes.dtype | None = None,
+        requires_grad: bool | None = None,
+        prefix: None | str = None,
+        distparallel_type: DistParallelType | None = None,
+        history: None | tuple = None,
+        tags: set | None = None,
+        thunder_fsdp_padding_size: int | None = None,
+    ):
+        super().__init__(name, prefix=prefix, history=history, tags=tags)
+
+        (
+            self._shape,
+            self._device,
+            self._dtype,
+            self._true_dtype,
+            self._numel,
+            self._ndim,
+            self._requires_grad,
+            self._distparallel_type,
+            self._thunder_fsdp_padding_size,
+        ) = _infer_tensor_properties(
+            like,
+            shape,
+            device,
+            dtype,
+            requires_grad,
+            distparallel_type,
+            thunder_fsdp_padding_size,
+        )
+
+        self._data = data
+        self._scale = scale
+        self._orig_dtype = orig_dtype
+        self._linear_mm_config = linear_mm_config
+        self._gemm_input_role = gemm_input_role
+
+    def replace(self, **changes):
+        data = changes.get("data", self._data)
+        scale = changes.get("scale", self._scale)
+        orig_dtype = changes.get("orig_dtype", self._orig_dtype)
+        linear_mm_config = changes.get("linear_mm_config", self._linear_mm_config)
+        gemm_input_role = changes.get("gemm_input_role", self._gemm_input_role)
+        like = changes.get("like")
+        (
+            shape,
+            device,
+            dtype,
+            true_dtype,
+            numel,
+            ndim,
+            requires_grad,
+            distparallel_type,
+            thunder_fsdp_padding_size,
+        ) = _infer_tensor_properties(
+            like,
+            changes.get("shape", self._shape if like is None else None),
+            changes.get("device", self._device if like is None else None),
+            changes.get("dtype", self._dtype if like is None else None),
+            changes.get("requires_grad", self._requires_grad if like is None else None),
+            changes.get("distparallel_type", self._distparallel_type if like is None else None),
+            changes.get("thunder_fsdp_padding_size", self._thunder_fsdp_padding_size if like is None else None),
+        )
+        name = changes.get("name", self.name)
+        history = changes.get("history", self.history)
+        tags = changes.get("tags", self.tags)
+        return TorchAoFloat8TensorProxy(
+            data=data,
+            scale=scale,
+            orig_dtype=orig_dtype,
+            linear_mm_config=linear_mm_config,
+            gemm_input_role=gemm_input_role,
+            name=name,
+            tags=tags,
+            shape=shape,
+            device=device,
+            dtype=dtype,
+            requires_grad=requires_grad,
+            distparallel_type=distparallel_type,
+            thunder_fsdp_padding_size=thunder_fsdp_padding_size,
+            history=history,
+        )
+
+
 class TorchAutogradFunctionCtxProxy(Proxy, TorchAutogradFunctionCtxProxyInterface):
     def __init__(
         self,
@@ -1938,6 +2034,27 @@ def tensorproxy(t: torch.Tensor, /, *, name: None | str, history: None | tuple =
     distparallel_type = getattr(t, "distparallel_type", None)
     _thunder_fsdp_padding_size = getattr(t, "_thunder_fsdp_padding_size", None)
     # NOTE Without tuple(t.shape) then the shape would be a torch.Size object
+    if package_available("torchao"):
+        from torchao.float8.float8_tensor import Float8Tensor
+
+        if isinstance(t, Float8Tensor):
+            orig_dtype = dtypes.to_dtype(t._orig_dtype)
+            return TorchAoFloat8TensorProxy(
+                data=t._data,
+                scale=t._scale,
+                name=name,
+                orig_dtype=orig_dtype,
+                linear_mm_config=t._linear_mm_config,
+                gemm_input_role=t._gemm_input_role,
+                shape=tuple(t.shape),
+                device=device,
+                dtype=orig_dtype,
+                requires_grad=t.requires_grad,
+                distparallel_type=distparallel_type,
+                history=history,
+                thunder_fsdp_padding_size=_thunder_fsdp_padding_size,
+            )
+
     return TensorProxy(
         name,
         shape=tuple(t.shape),
@@ -1990,6 +2107,8 @@ def proxy(x: Any, *, name: str | None = None, history: None | tuple = None) -> A
     if x is ...:
         return AnyProxy(x, name=name, history=history)
 
+    # note(Crcrpar): this path covers tensor subclasses
+    # and they are handled inside of `tensorproxy`.
     if isinstance(x, torch.Tensor):
         return tensorproxy(x, name=name, history=history)
 

@@ -13,9 +13,10 @@ from collections.abc import Hashable, Sequence
 from collections.abc import Sequence
 from types import ModuleType
 from enum import Enum, auto
-
-import torch
 import math
+
+from lightning_utilities.core.imports import package_available
+import torch
 from looseversion import LooseVersion
 
 import thunder.core.dtypes as dtypes
@@ -24,7 +25,14 @@ import thunder.core.devices as devices
 from thunder.core.devices import to_torch_device, to_device
 import thunder.core.prims as prims
 from thunder.core.trace import TraceCtx, set_tracectx, reset_tracectx, from_trace
-from thunder.core.proxies import NumberProxy, TensorProxy, FutureTensorProxy, variableify, pytype
+from thunder.core.proxies import (
+    NumberProxy,
+    TensorProxy,
+    FutureTensorProxy,
+    TorchAoFloat8TensorProxy,
+    variableify,
+    pytype,
+)
 from thunder.core.pytree import tree_flatten, tree_unflatten
 from thunder.core.symbol import Symbol, BoundSymbol
 from thunder.distributed.prims import DistributedReduceOps
@@ -2148,3 +2156,34 @@ def _shape_impl(t):
 
 shape = ex.register_operator("shape", meta=prims.shape_meta, fn=_shape_impl)
 _register_implementation(prims.shape, shape, checker=_always_executable)
+
+
+if package_available("torchao"):
+
+    from torchao.float8.float8_tensor import Float8Tensor, GemmInputRole, LinearMMConfig
+
+    def _torchao_float8_tensor_impl(
+        data: TensorLike,
+        scale: TensorLike,
+        orig_dtype: dtypes.dtype,
+        linear_mm_config,
+        gemm_input_role,
+    ):
+        return Float8Tensor(
+            data=data,
+            scale=scale,
+            orig_dtype=to_torch_dtype(orig_dtype),
+            linear_mm_config=linear_mm_config,
+            gemm_input_role=gemm_input_role,
+        )
+
+    torchao_float8_tensor = ex.register_operator(
+        "torchao_float8_tensor",
+        meta=prims._torchao_float8_tensor_meta,
+        fn=_torchao_float8_tensor_impl,
+    )
+    _register_implementation(
+        prims._torchao_float8_tensor_meta,
+        torchao_float8_tensor,
+        checker=_always_executable,
+    )
