@@ -1931,14 +1931,10 @@ class SubclassTensorProxy(TensorProxy):
         flat_tensor_subclass_args: list[TensorProxy | dict[str, Any]] = tensor_subclass_args + list(
             tensor_subclass_kwargs.values()
         )
-        baseutils.check(
-            not flat_tensor_subclass_args,
-            lambda: (
-                f"args/kwargs for tensor subclasses are found: {flat_tensor_subclass_args}. "
-                "Subclass tensor instantiation inside of a callable is not supported yet."
-            ),
-            exception_type=NotImplementedError,
-        )
+        if flat_tensor_subclass_args and "like" not in filtered_kwargs:
+            for t in flat_tensor_subclass_args:
+                if isinstance(t, (torch.Tensor, TensorProxy)):
+                    filtered_kwargs["like"] = t
         super().__init__(*filtered_args, **filtered_kwargs)
 
         self._tensors = []
