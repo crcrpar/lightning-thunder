@@ -745,7 +745,6 @@ def _general_jit__make_wrapper_subclass_lookaside(
     u_strides = unwrap(strides)
     u_dtype = unwrap(dtype)
     u_device = unwrap(device)
-    u_pin_memory = unwrap(pin_memory)
     u_requires_grad = unwrap(requires_grad)
     if not (u_strides is None or not u_strides):
         warnings.warn(f"Thunder is not capable of utilizing strides of {u_strides}")
@@ -756,6 +755,9 @@ def _general_jit__make_wrapper_subclass_lookaside(
         dtype=u_dtype,
         requires_grad=u_requires_grad,
     )
+    cls_type = unwrap(cls)
+    placeholder_tensor._tensor_subclass_type = cls_type
+    placeholder_tensor._torch_dispatch_impl = cls_type.__torch_dispatch__
     wrapped = WrappedValue(placeholder_tensor, provenance=size.provenance)
     return wrapped
 

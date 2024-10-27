@@ -1933,7 +1933,7 @@ class SubclassTensorProxy(TensorProxy):
         )
         if flat_tensor_subclass_args and "like" not in filtered_kwargs:
             for t in flat_tensor_subclass_args:
-                if isinstance(t, (torch.Tensor, TensorProxy)):
+                if type(t) in {torch.Tensor, TensorProxy}:
                     filtered_kwargs["like"] = t
         super().__init__(*filtered_args, **filtered_kwargs)
 
