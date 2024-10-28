@@ -721,45 +721,56 @@ def _general_jit_torch_autograd_function_apply_lookaside(obj: Any, *args, **kwar
 
 # NOTE(crcrpar): This isn't needed as of now due to the ban of subclass instantiation inside of callable
 # ref for args: https://github.com/pytorch/pytorch/blob/deaf041/torch/csrc/autograd/python_variable.cpp#L748-L778
-@register_general_jit_lookaside(torch.Tensor._make_wrapper_subclass)
-def _general_jit__make_wrapper_subclass_lookaside(
-    cls,
-    size,
-    strides: Sequence[int] | None = None,
-    storage_offset: int | None = None,
-    memory_format: torch.memory_format | None = None,
-    dtype: torch.dtype | None = None,
-    layout: torch.layout = torch.strided,
-    device: torch.device | None = None,
-    pin_memory: bool = False,
-    requires_grad: bool = False,
-    dispatch_sizes_strides_policy: str = None,
-    dispatch_device: bool = False,
-    dispatch_layout: bool = False,
-    _extra_dispatch_keys: Any | None = None,
-    storage_size: int | None = None,
-):
-    from thunder.core.proxies import SubclassTensorProxy
-
-    u_size = unwrap(size)
-    u_strides = unwrap(strides)
-    u_dtype = unwrap(dtype)
-    u_device = unwrap(device)
-    u_requires_grad = unwrap(requires_grad)
-    if not (u_strides is None or not u_strides):
-        warnings.warn(f"Thunder is not capable of utilizing strides of {u_strides}")
-    placeholder_tensor = SubclassTensorProxy(
-        name=None,
-        shape=tuple(u_size),
-        device=u_device,
-        dtype=u_dtype,
-        requires_grad=u_requires_grad,
-    )
-    cls_type = unwrap(cls)
-    placeholder_tensor._tensor_subclass_type = cls_type
-    placeholder_tensor._torch_dispatch_impl = cls_type.__torch_dispatch__
-    wrapped = WrappedValue(placeholder_tensor, provenance=size.provenance)
-    return wrapped
+# @register_general_jit_lookaside(torch.Tensor._make_wrapper_subclass)
+# def _general_jit__make_wrapper_subclass_lookaside(
+#     cls,
+#     size,
+#     strides: Sequence[int] | None = None,
+#     storage_offset: int | None = None,
+#     memory_format: torch.memory_format | None = None,
+#     dtype: torch.dtype | None = None,
+#     layout: torch.layout = torch.strided,
+#     device: torch.device | None = None,
+#     pin_memory: bool = False,
+#     requires_grad: bool = False,
+#     dispatch_sizes_strides_policy: str = None,
+#     dispatch_device: bool = False,
+#     dispatch_layout: bool = False,
+#     _extra_dispatch_keys: Any | None = None,
+#     storage_size: int | None = None,
+# ):
+#     from thunder.core.proxies import SubclassTensorProxy
+#
+#     u_size = unwrap(size)
+#     u_strides = unwrap(strides)
+#     u_dtype = unwrap(dtype)
+#     u_device = unwrap(device)
+#     u_requires_grad = unwrap(requires_grad)
+#     if not (u_strides is None or not u_strides):
+#         warnings.warn(f"Thunder is not capable of utilizing strides of {u_strides}")
+#     placeholder_tensor = SubclassTensorProxy(
+#         name=None,
+#         shape=tuple(u_size),
+#         device=u_device,
+#         dtype=u_dtype,
+#         requires_grad=u_requires_grad,
+#     )
+#     cls_type = unwrap(cls)
+#     placeholder_tensor._tensor_subclass_type = cls_type
+#     placeholder_tensor._torch_dispatch_impl = cls_type.__torch_dispatch__
+#
+#     return_tensor_proxy = prims.tensor_subcalss_ctor.meta(placeholder_tensor)
+#     jit_ctx = get_jit_ctx()
+#     jit_ctx.computation_trace.add_bound_symbol(
+#         prims.tensor_subcalss_ctor.bind(
+#             placeholder_tensor,
+#             output=(return_tensor_proxy,),
+#         )
+#     )
+#     return_tensor_proxy._tensor_subclass_type = cls_type
+#     return_tensor_proxy._torch_dispatch_impl = cls_type.__torch_dispatch__
+#     wrapped = WrappedValue(return_tensor_proxy, provenance=size.provenance)
+#     return wrapped
 
 
 @register_general_jit_lookaside(torch.finfo)

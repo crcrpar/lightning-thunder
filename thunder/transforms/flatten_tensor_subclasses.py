@@ -178,6 +178,7 @@ class DesugarTensorSubclass:
     requires_desugarring: bool = field(init=False, default=False)
 
     def __post_init__(self) -> None:
+        print(f"[DesugarTensorSubclass] computation trace\n{self.computation_trace}")
         self.requires_desugarring = any(
             isinstance(t, SubclassTensorProxy)
             for t in tree_flatten((self.computation_trace.args, self.computation_trace.kwargs))[0]
@@ -438,7 +439,8 @@ class DesugarTensorSubclass:
         self.swap_map.update(dict(zip(sequence_out, utils.sequencify(out_proxy))))
 
         bsym_with_modified_output = updated_bsym.from_bsym_swap_proxies(self.swap_map)
-        return self.translate_fx_graph_into_bsym(bsym_with_modified_output, fx)
+        ret = self.translate_fx_graph_into_bsym(bsym_with_modified_output, fx)
+        return ret
 
 
 def flatten_tensor_subclasses(computation_trace: TraceCtx) -> TraceCtx:

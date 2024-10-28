@@ -13,12 +13,6 @@ from functools import partial, reduce, wraps
 from numbers import Number
 from types import NoneType, ModuleType
 from typing import Any, overload
-import builtins
-import collections
-import itertools
-import math
-import operator
-import re
 
 import opt_einsum
 
@@ -41,6 +35,7 @@ from thunder.core.proxies import (
     NumberLike,
     TensorProxy,
     FutureTensorProxy,
+    SubclassTensorProxy,
     pyval,
     TupleProxy,
     ListProxy,
@@ -850,6 +845,39 @@ def empty(
     device = to_device(maybe_get_default_device(device))
 
     return clang.empty(size, device=device, dtype=dtype)
+
+
+# ref: https://github.com/pytorch/pytorch/blob/4d9b5a8/torch/csrc/autograd/python_variable.cpp#L749
+# static PythonArgParser parser({
+#     "_make_wrapper_subclass(PyObject* cls, SymIntArrayRef size, SymIntArrayRef? strides=None, "
+#     "SymInt? storage_offset=None, MemoryFormat? memory_format=None, ScalarType dtype=None, "
+#     "Layout layout=torch.strided, Device device=None, bool pin_memory=False, bool requires_grad=False, "
+#     "c10::string_view? dispatch_sizes_strides_policy=None, bool dispatch_device=False, bool dispatch_layout=False, "
+#     "DispatchKeySet _extra_dispatch_keys=None, SymInt? storage_size=None)",
+# });
+@torchsymbol(torch.Tensor._make_wrapper_subclass, is_method=True)
+def _make_wrapper_subclass(
+    cls,
+    size,
+    strides: int | None = None,
+    storage_offset: int | None = None,
+    memory_format: torch.memory_format | None = None,
+    dtype: torch.dtype | None = None,
+    layout: torch.layout = torch.strided,
+    device: torch.device | None = None,
+    pin_memory: bool = False,
+    requires_grad: bool = False,
+    dispatch_sizes_strides_policy: str | None = None,
+    dispatch_device: bool = False,
+    dispatch_layout: bool = False,
+    _extra_dispatch_keys: Any | None = None,
+    storage_size: int | None = None,
+) -> SubclassTensorProxy:
+    print(f"[thunder.torch - _make_wrapper_subclass] {cls = }")
+    s = SubclassTensorProxy(shape=size, device=device, dtype=dtype, requires_grad=requires_grad)
+    s._tensor_subclass_type = cls
+    s._torch_dispatch_impl = cls.__torch_dispatch__
+    return s
 
 
 #

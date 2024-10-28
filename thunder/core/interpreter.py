@@ -64,7 +64,7 @@ from thunder.core.codeutils import Positions
 #   of where values originated. This mode is used by the general jit. This is done by
 #   wrapping all values in WrappedValues.
 #
-#   Both thunder.jit and thunder.functional.jit use extensions (in jit_ext.py) to
+#   thunder.jit uses extensions (in jit_ext.py) to
 #   create Thunder Programs. They use callbacks and additional lookasides to
 #   add their functionality.
 #
@@ -6631,8 +6631,23 @@ def _call_dispatch(
         # TODO: Deeper unwrapping?
         args_ = tuple(unwrap(a) for a in args)
         kwargs_ = {unwrap(k): unwrap(v) for k, v in kwargs.items()}
+
+        from thunder.core import dtypes
+        from thunder.core import devices
+        from thunder.core.pytree import tree_map
+
+        def to_torch_obj(a: Any) -> Any:
+            if isinstance(a, dtypes.dtype):
+                return dtypes.to_torch_dtype(a)
+            if isinstance(a, devices.Device):
+                return devices.to_torch_device(a)
+            return a
+
+        _args_, _kwargs_ = tree_map(to_torch_obj, (args_, kwargs_))
+
         try:
             runtimectx.record_opaque_call(fn)
+            # print(f"[interpreter - opaque] {fn = }, {args_ = }, {kwargs_ = }, {_args_ = }, {_kwargs_ = }")
             opaque_result: Any = fn(*args_, **kwargs_)
         except Exception as e:
             runtimectx.curexc = e
@@ -7345,4 +7360,5 @@ def print_interpreter_log(
                 print_fn(f"{' ' * c_indent if indent else ''}{linecolor}{source_line}{colors['RESET']}")
 
         if deindent:
+            c_indent -= 1
             c_indent -= 1

@@ -1944,6 +1944,21 @@ class SubclassTensorProxy(TensorProxy):
         self._tensor_subclass_type = None
         self._metadata = {}
 
+        flat_tensor_args = list(filter(lambda t: isinstance(t, TensorProxy), flat_tensor_subclass_args))
+        flat_non_tensor_args = list(filter(lambda t: not isinstance(t, TensorProxy), flat_tensor_subclass_args))
+        baseutils.check(
+            (not flat_non_tensor_args) or len(flat_non_tensor_args) == 1,
+            lambda: f"non tensor args should be empty or 1: {flat_tensor_subclass_args}",
+        )
+        print(f"[proxies - SubclassTensorProxy] {self = }")
+
+        if flat_tensor_subclass_args:
+            for t in flat_tensor_args:
+                if t.history is not None:
+                    self.history = t.history
+            self._tensors.extend(flat_tensor_args)
+            self._set_non_tensor_attrs(flat_non_tensor_args[-1])
+
     def __tensor_flatten__(self) -> tuple[list[TensorProxy], dict[str, Any]]:
         return self._tensor_attr_names, self._metadata
 
@@ -2150,7 +2165,7 @@ def tensorproxy(t: torch.Tensor, /, *, name: None | str, history: None | tuple =
     )
 
     tensor_type = type(t)
-    if tensor_type != torch.Tensor and tensor_type != torch.nn.Parameter:
+    if False and (tensor_type != torch.Tensor and tensor_type != torch.nn.Parameter):
         baseutils.check(
             is_traceable_wrapper_subclass_type(tensor_type),
             lambda: f"Untraceable tensor subclass of {tensor_type} found",

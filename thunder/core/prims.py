@@ -276,6 +276,7 @@ class PrimIDs(Enum):
     # Flatten/Unflatten Tensor Subclass Proxy
     FLATTEN_TENSOR_SUBCLASS = auto()
     UNFLATTEN_TENSOR_SUBCLASS = auto()
+    TENSOR_SUBCLASS_CTOR = auto()
 
 
 class OpTags(Enum):
@@ -4096,5 +4097,18 @@ unflatten_tensor_subclass = make_prim(
     PrimIDs.UNFLATTEN_TENSOR_SUBCLASS,
     "unflatten_tensor_subclass",
     meta=unflatten_tensor_subclass_meta,
-    # python_impl=unflatten_tensor_subclass_python_impl,
+)
+
+
+def tensor_subcalss_ctor_meta(
+    subclass_tensor_proxy: SubclassTensorProxy,
+) -> SubclassTensorProxy:
+    return subclass_tensor_proxy
+
+
+tensor_subcalss_ctor = make_prim(
+    PrimIDs.TENSOR_SUBCLASS_CTOR,
+    "tensor_subcalss_ctor",
+    meta=tensor_subcalss_ctor_meta,
+    python_impl=tensor_subcalss_ctor_meta,
 )
