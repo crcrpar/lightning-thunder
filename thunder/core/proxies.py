@@ -1950,14 +1950,14 @@ class SubclassTensorProxy(TensorProxy):
             (not flat_non_tensor_args) or len(flat_non_tensor_args) == 1,
             lambda: f"non tensor args should be empty or 1: {flat_tensor_subclass_args}",
         )
-        print(f"[proxies - SubclassTensorProxy] {self = }")
 
         if flat_tensor_subclass_args:
             for t in flat_tensor_args:
                 if t.history is not None:
                     self.history = t.history
             self._tensors.extend(flat_tensor_args)
-            self._set_non_tensor_attrs(flat_non_tensor_args[-1])
+            if flat_non_tensor_args:
+                self._set_non_tensor_attrs(flat_non_tensor_args[-1])
 
     def __tensor_flatten__(self) -> tuple[list[TensorProxy], dict[str, Any]]:
         return self._tensor_attr_names, self._metadata
