@@ -65,6 +65,61 @@ __all__ = [
 import torch
 import torch._higher_order_ops.wrap
 
+
+def _iter_op_overloads(op_packet):
+    overloads = getattr(op_packet, "overloads", None)
+    if callable(overloads):
+        for overload_name in op_packet.overloads():
+            try:
+                yield getattr(op_packet, overload_name)
+            except AttributeError:
+                continue
+
+
+def _register_ops_alias_for_namespace(sym: Callable, namespace: str, op_name: str | None) -> None:
+    if not isinstance(op_name, str) or not op_name:
+        return
+
+    ops_namespace = getattr(torch.ops, namespace, None)
+    if ops_namespace is None:
+        return
+
+    try:
+        op_packet = getattr(ops_namespace, op_name)
+    except AttributeError:
+        return
+
+    _torch_to_thunder_function_map[op_packet] = sym
+
+    for overload_fn in _iter_op_overloads(op_packet):
+        _torch_to_thunder_function_map[overload_fn] = sym
+
+
+def _maybe_register_aten_aliases(sym: Callable, torchfns: Sequence[Callable] | None = None) -> None:
+    torchfns = torchfns or ()
+    candidate_names: set[str] = set()
+
+    for torchfn in torchfns:
+        if isinstance(torchfn, (torch._ops.OpOverloadPacket, torch._ops.OpOverload)):
+            continue
+        name = getattr(torchfn, "__name__", None)
+        if isinstance(name, str) and name:
+            candidate_names.add(name)
+
+    sym_id = getattr(sym, "id", None)
+    if isinstance(sym_id, str) and sym_id:
+        candidate_names.add(sym_id.rsplit(".", 1)[-1])
+
+    sym_name = getattr(sym, "name", None)
+    if not isinstance(sym_name, str) or not sym_name:
+        sym_name = getattr(sym, "__name__", None)
+    if isinstance(sym_name, str) and sym_name:
+        candidate_names.add(sym_name)
+
+    for name in candidate_names:
+        _register_ops_alias_for_namespace(sym, "aten", name)
+
+
 import warnings
 
 # Type annotation helpers
@@ -211,22 +266,28 @@ class torchsymbol:
         else:
             sym = Symbol(name=fn.__name__, meta=wrapper, id=id, is_prim=self.is_prim, tags=self.tags)
 
+        candidate_torchfns: list[Callable] = list(self.torchfns or ())
+
         if self.is_method:
             method_name: str = self.method_name if self.method_name is not None else fn.__name__
             register_method(method_name, sym)
             torch_method: None | Callable = getattr(torch.Tensor, method_name, None)
             if torch_method is not None:
                 _torch_to_thunder_function_map[torch_method] = sym
+                candidate_torchfns.append(torch_method)
         elif self.is_property:
             method_name: str = self.method_name if self.method_name is not None else fn.__name__
             register_property(method_name, sym)
             torch_property = getattr(torch.Tensor, method_name, None)
             if torch_property is not None:
                 _torch_to_thunder_function_map[torch_property] = sym
+                candidate_torchfns.append(torch_property)
 
         if self.torchfns is not None:
             for torchfn in self.torchfns:
                 _torch_to_thunder_function_map[torchfn] = sym
+
+        _maybe_register_aten_aliases(sym, candidate_torchfns)
 
         if self.tags and prims.OpTags.IN_PLACE in self.tags:
             if self.id is not None:
@@ -245,6 +306,7 @@ class torchsymbol:
 # See `clone` and `torch.device` for example.
 def register_function(torchfn, thunderfn_impl):
     _torch_to_thunder_function_map[torchfn] = thunderfn_impl
+    _maybe_register_aten_aliases(thunderfn_impl, (torchfn,))
 
 
 def _copy_(a, b, /):
@@ -6615,6 +6677,20 @@ def register_default_torch_ops():
             register_default_torch_op(fn, m)
 
 
+def _register_prim_aliases() -> None:
+    prim_namespaces = [ns for ns in ("prim", "prims") if getattr(torch.ops, ns, None) is not None]
+    if not prim_namespaces:
+        return
+
+    for attr_name in dir(prims):
+        if attr_name.startswith("_"):
+            continue
+        attr = getattr(prims, attr_name)
+        if isinstance(attr, Symbol):
+            for namespace in prim_namespaces:
+                _register_ops_alias_for_namespace(attr, namespace, attr_name)
+
+
 def _get_torch_function_name(torch_module: ModuleType, torchfn: Callable):
     # Handle special cases where torchfn.__name__ differs from the name used to call it in Python,
     # e.g., `torch.nn.functional.logsigmoid.__name__` is 'log_sigmoid'.
@@ -6664,6 +6740,7 @@ def register_default_torch_op(torchfn: Callable, torch_module):
             sym_exist = True
 
     _torch_to_thunder_function_map[torchfn] = sym
+    _maybe_register_aten_aliases(sym, (torchfn,))
 
     # TODO: convert to an assert after #1140 is fixed
     if torchfn_name not in __builtins__ and not hasattr(sys.modules["thunder.torch"], torchfn_name):
@@ -6846,6 +6923,7 @@ def check_overlap_ops():
 # Verify that there is no overlap between automatically registered operations and manually registered operations.
 check_overlap_ops()
 register_default_torch_ops()
+_register_prim_aliases()
 
 
 #

@@ -26,6 +26,7 @@ from looseversion import LooseVersion
 
 import torch
 import torch.distributed as dist
+import torch.fx
 import torch.nn as nn
 from torch.distributed.device_mesh import init_device_mesh
 from torch.distributed.tensor.parallel import parallelize_module, RowwiseParallel, ColwiseParallel
@@ -127,6 +128,20 @@ def _quantize_llama4(model: nn.Module) -> None:
         NVFP4InferenceGroupedLinear.from_grouped_linear,
         lambda model, cur_fqn: isinstance(model, GroupedLinear),
     )
+
+
+def _thunder_after_aot_backend(gm: torch.fx.GraphModule, example_inputs):
+    """torch.compile backend that wraps AOTAutograd-produced graphs with thunder.jit."""
+
+    if type(gm) is not torch.fx.GraphModule:
+        gm = torch.fx.GraphModule(gm, gm.graph)
+
+    compiled = thunder.jit(gm)
+
+    def wrapped(*args, **kwargs):
+        return compiled(*args, **kwargs)
+
+    return wrapped
 
 
 @contextmanager
@@ -299,6 +314,8 @@ class InferenceBenchmark:
                 return model
             case "inductor":
                 return torch.compile(model, mode="reduce-overhead")
+            case "thunder_after_aotautograd":
+                return torch.compile(model, backend=_thunder_after_aot_backend)
             case "thunder":
                 return thunderfx(model, **self._thunder_jit_options)
             case "thunderjit":
@@ -652,8 +669,8 @@ Examples:
         "--mode",
         type=str,
         default="eager",
-        choices=("thunder", "eager", "inductor", "thunderjit"),
-        help="Compilation mode: thunder, eager (default), or inductor. thunder runs thunderfx.",
+        choices=("thunder", "eager", "inductor", "thunderjit", "thunder_after_aotautograd"),
+        help="Compilation mode: thunder (thunderfx), eager (default), inductor, thunderjit, or thunder_after_aotautograd (torch.compile backend that calls thunder.jit).",
     )
     parser.add_argument(
         "--fx-report-folder",

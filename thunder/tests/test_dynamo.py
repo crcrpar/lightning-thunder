@@ -1414,6 +1414,48 @@ def test_ThunderCompileSpecification():
     )
 
 
+@pytest.mark.skipif(
+    IS_WINDOWS,
+    reason="torch.compile Windows support is still WIP - https://github.com/pytorch/pytorch/issues/122094",
+)
+def test_torch_compile_backend_thunder_jit_after_aotautograd():
+    """Ensure thunder.jit can serve as a custom backend after AOTAutograd.
+
+    This follows the workflow described in the PyTorch docs on "Custom Backends after AOTAutograd" [1].
+
+    [1] https://docs.pytorch.org/docs/stable/torch.compiler_custom_backends.html#custom-backends-after-aotautograd
+    """
+
+    def thunder_after_aot_backend(gm: torch.fx.GraphModule, example_inputs):
+        if type(gm) is not torch.fx.GraphModule:
+            gm = torch.fx.GraphModule(gm, gm.graph)
+        compiled = thunder.jit(gm)
+
+        def wrapped(*args):
+            return compiled(*args)
+
+        return wrapped
+
+    def fn(x, y):
+        return (torch.sin(x) * torch.cos(y)).sum()
+
+    compiled_fn = torch.compile(fn, backend=thunder_after_aot_backend)
+
+    x = torch.randn(4, requires_grad=True)
+    y = torch.randn(4, requires_grad=True)
+    x_ref = x.detach().clone().requires_grad_(True)
+    y_ref = y.detach().clone().requires_grad_(True)
+
+    out = compiled_fn(x, y)
+    ref = fn(x_ref, y_ref)
+    torch.testing.assert_close(out, ref)
+
+    out.backward()
+    ref.backward()
+    torch.testing.assert_close(x.grad, x_ref.grad)
+    torch.testing.assert_close(y.grad, y_ref.grad)
+
+
 @requiresCUDA
 @given(file_indices=st.lists(st.integers(min_value=0, max_value=15), min_size=2, max_size=2, unique=True))
 @settings(max_examples=2, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture])
