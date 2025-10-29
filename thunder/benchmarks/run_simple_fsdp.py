@@ -16,11 +16,12 @@ import torch
 import torch.fx
 import torch.nn as nn
 from torch.distributed.device_mesh import init_device_mesh
-from torchtitan.experiments.simple_fsdp.simple_fsdp import data_parallel
+from torchtitan.experiments.simple_fsdp.simple_fsdp import data_parallel  # type: ignore[import]
 from transformers import AutoConfig, AutoModel
 
-import thunder
 from thunder.dynamo.compiler import ThunderCompiler
+
+from torch._functorch._aot_autograd.utils import make_boxed_func as _aot_make_boxed_func
 
 
 LOCAL_RANK = int(os.getenv("LOCAL_RANK", "0"))
@@ -44,10 +45,12 @@ def _thunder_after_aot_backend(gm: torch.fx.GraphModule, example_inputs):
     if type(gm) is not torch.fx.GraphModule:
         gm = torch.fx.GraphModule(gm, gm.graph)
 
-    thunder_compiled = thunder.jit(gm)
+    compiler = ThunderCompiler(disable_torch_autograd=True)
+    compiled_module = compiler(gm, list(example_inputs))
+    boxed = _aot_make_boxed_func(compiled_module)
 
-    def wrapped(*args, **kwargs):
-        return thunder_compiled(*args, **kwargs)
+    def wrapped(*args):
+        return boxed(list(args))
 
     return wrapped
 

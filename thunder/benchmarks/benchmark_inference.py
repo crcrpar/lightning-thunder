@@ -39,7 +39,7 @@ from torch.distributed.tensor.placement_types import Shard
 from torch.distributed.tensor import DTensor
 
 import thunder
-from thunder.dynamo.compiler import thunderfx
+from thunder.dynamo.compiler import ThunderCompiler, thunderfx
 from thunder.benchmarks.layers_for_inference_benchmark import (
     GroupedLinear,
     Llama4MoE,
@@ -116,6 +116,9 @@ def _replace_llama4_moe(model: nn.Module) -> None:
     )
 
 
+from torch._functorch._aot_autograd.utils import make_boxed_func as _aot_make_boxed_func
+
+
 def _quantize_llama4(model: nn.Module) -> None:
     """Replace linear and moe with nvfp4 inference version."""
     _replace_with_custom_fn_if_matches_filter_with_name(
@@ -136,10 +139,12 @@ def _thunder_after_aot_backend(gm: torch.fx.GraphModule, example_inputs):
     if type(gm) is not torch.fx.GraphModule:
         gm = torch.fx.GraphModule(gm, gm.graph)
 
-    compiled = thunder.jit(gm)
+    compiler = ThunderCompiler(disable_torch_autograd=True)
+    compiled_module = compiler(gm, list(example_inputs))
+    boxed = _aot_make_boxed_func(compiled_module)
 
-    def wrapped(*args, **kwargs):
-        return compiled(*args, **kwargs)
+    def wrapped(*args):
+        return boxed(list(args))
 
     return wrapped
 
